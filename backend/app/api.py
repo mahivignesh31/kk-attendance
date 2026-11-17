@@ -86,7 +86,7 @@ def health():
         "status": "ok",
         "portal": PORTAL_REPORT_URL,
         "writes_to_portal": False,
-        "remote_browser": False,
+        "remote_browser": remote_display_enabled(),
         "cloud_sync_blocked": cloud_portal_sync_blocked(),
         "chrome_sync": True,
     }
@@ -133,8 +133,12 @@ def bootstrap():
         "open_issues": issues,
         "sync": dict(current) if current else None,
         "portal_url": PORTAL_REPORT_URL,
-        "remote_browser": False,
-        "remote_browser_path": None,
+        "remote_browser": remote_display_enabled(),
+        "remote_browser_path": (
+            "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"
+            if remote_display_enabled()
+            else None
+        ),
         "cloud_sync_blocked": cloud_portal_sync_blocked(),
         "chrome_sync": True,
     }

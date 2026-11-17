@@ -122,10 +122,14 @@ def _start(url: str, *, debug: bool) -> None:
         "--window-size=1440,900",
         "--window-position=0,0",
         "--start-maximized",
-        # Look like a normal desktop Chrome, not a bot.
+        "--lang=en-IN",
         "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+        "--disable-notifications",
         "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        # Always open the real portal homepage (avoids stuck API JSON 401 tabs).
+        "https://kaushal.dord.gov.in/",
     ]
     if debug:
         args.extend(
@@ -134,8 +138,7 @@ def _start(url: str, *, debug: bool) -> None:
                 "--remote-debugging-address=127.0.0.1",
             ]
         )
-    args.append(url)
-    logger.info("Starting live Chromium debug=%s url=%s", debug, url)
+    logger.info("Starting live Chromium debug=%s requested=%s", debug, url)
     _proc = subprocess.Popen(
         args,
         env=env,
