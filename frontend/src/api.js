@@ -1,4 +1,9 @@
-const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+// Production default: Railway API (so Git-imported Vercel builds work without env).
+const DEFAULT_PROD_API = "https://kk-attendance-production.up.railway.app";
+const API_BASE = (
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD ? DEFAULT_PROD_API : "")
+).replace(/\/$/, "");
 
 export function apiUrl(path) {
   if (!path) return API_BASE || "/";
