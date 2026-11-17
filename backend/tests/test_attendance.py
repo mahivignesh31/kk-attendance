@@ -555,6 +555,20 @@ def test_candidate_id_punch_table_builds_present_and_absent():
         date_to=None,
         existing={"2026-10-15": {"detail_synced": 1}},
     ) == ["2026-10-16"]
+    assert filter_dates(
+        ["2026-10-16"],
+        mode="range",
+        date_from="2026-10-15",
+        date_to="2026-10-17",
+        existing={},
+    ) == ["2026-10-15", "2026-10-16", "2026-10-17"]
+    assert filter_dates(
+        [],
+        mode="range",
+        date_from="2026-11-01",
+        date_to="2026-11-01",
+        existing={},
+    ) == ["2026-11-01"]
 
 
 def test_api_serves_candidates_exports_and_does_not_seed_attendance(tmp_path, monkeypatch):

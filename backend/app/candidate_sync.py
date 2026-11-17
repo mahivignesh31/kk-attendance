@@ -180,13 +180,30 @@ def filter_dates(
     date_to: Optional[str],
     existing: dict[str, dict],
 ) -> list[str]:
+    from datetime import timedelta
+
+    from .calculator import parse_date
+
     selected = sorted(dates)
     if mode == "range":
-        if date_from:
-            selected = [day for day in selected if day >= date_from]
-        if date_to:
-            selected = [day for day in selected if day <= date_to]
-        return selected
+        # Cross-check one date or a range: include every calendar day in the
+        # window, even when nobody punched (those days save as all-absent).
+        start = parse_date(date_from) if date_from else None
+        end = parse_date(date_to) if date_to else start
+        if start is None or end is None:
+            if date_from:
+                selected = [day for day in selected if day >= date_from]
+            if date_to:
+                selected = [day for day in selected if day <= date_to]
+            return selected
+        if end < start:
+            start, end = end, start
+        days: list[str] = []
+        cursor = start
+        while cursor <= end:
+            days.append(cursor.isoformat())
+            cursor += timedelta(days=1)
+        return days
     if mode == "full":
         return selected
     # incremental: new dates, or dates not yet detail-synced

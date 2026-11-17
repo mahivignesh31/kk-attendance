@@ -17,7 +17,7 @@ const STEPS = [
 export default function SyncPage() {
   const [current, setCurrent] = useState(null);
   const [history, setHistory] = useState([]);
-  const [mode, setMode] = useState("incremental");
+  const [mode, setMode] = useState("date");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [error, setError] = useState("");
@@ -40,14 +40,14 @@ export default function SyncPage() {
   async function start() {
     setError("");
     if (mode === "date" && !dateFrom) {
-      setError("Choose the date to resync.");
+      setError("Choose the date to check.");
       return;
     }
     if (mode === "range" && (!dateFrom || !dateTo)) {
       setError("Choose the start date and the end date.");
       return;
     }
-    if (mode === "full" && !window.confirm("Resync all dates re-reads every date the portal lists. It does not change official attendance. Continue?")) {
+    if (mode === "full" && !window.confirm("Check all dates re-reads every punch date found for this batch. Official portal attendance is never changed. Continue?")) {
       return;
     }
     const payloadMode = mode === "date" ? "range" : mode;
@@ -72,31 +72,38 @@ export default function SyncPage() {
       <div>
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          Sync opens the official Kaushal login, then reads each Candidate ID punch history (faster than clicking Present/Half/Absent per date). Sign in yourself. Official attendance is never edited. Choose one date, a range, or all dates to save.
+          Sync opens the official Kaushal login, then reads each Candidate ID punch history. Sign in yourself. Official attendance is never edited. You can cross-check one date, a date range, or all dates.
         </p>
       </div>
 
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <div className="flex flex-wrap gap-4 text-sm">
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> Resync one date</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} /> Resync a date range</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> Resync all dates</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New or changed dates</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> Check one date</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} /> Check a date range</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> Check all dates</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only</label>
         </div>
         {mode === "date" && (
           <div className="mt-4">
-            <input type="date" aria-label="Date to resync" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            <label className="mb-1 block text-xs font-medium text-slate-500">Date to check</label>
+            <input type="date" aria-label="Date to check" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           </div>
         )}
         {mode === "range" && (
           <div className="mt-4 flex flex-wrap gap-3">
-            <input type="date" aria-label="Range start" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-            <input type="date" aria-label="Range end" className="rounded-xl border border-plum-100 px-3 py-2" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">From</label>
+              <input type="date" aria-label="Range start" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-500">To</label>
+              <input type="date" aria-label="Range end" className="rounded-xl border border-plum-100 px-3 py-2" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            </div>
           </div>
         )}
         <div className="mt-5 flex flex-wrap gap-3">
           <button type="button" disabled={busy || running} onClick={start} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
-            SYNC ATTENDANCE FROM KAUSHAL PORTAL
+            {mode === "date" ? "CHECK THIS DATE" : mode === "range" ? "CHECK THIS RANGE" : mode === "full" ? "CHECK ALL DATES" : "SYNC NEW DATES"}
           </button>
           {running && (
             <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
