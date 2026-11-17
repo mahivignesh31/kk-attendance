@@ -150,7 +150,7 @@ export default function SyncPage() {
             <div>
               <h2 className="font-semibold">Live Kaushal window</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Sign into Kaushal here on this online site. If you see Unauthorized, click Reload Kaushal login.
+                Sign into Kaushal here. Do not use Google in this window (Railway IPs get blocked). Search uses DuckDuckGo. If stuck, click Reload Kaushal login.
               </p>
             </div>
             {browserSrc && (

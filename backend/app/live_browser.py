@@ -8,6 +8,7 @@ sync can read reports. Cookies survive in the profile directory.
 from __future__ import annotations
 
 import glob
+import json
 import logging
 import os
 import signal
@@ -18,6 +19,9 @@ from typing import Optional
 from urllib.request import urlopen
 
 from .config import PORTAL_LOGIN_URL, browser_profile_dir, remote_display_enabled
+
+KAUSHAL_HOME = "https://kaushal.dord.gov.in/"
+DUCKDUCKGO_SEARCH = "https://duckduckgo.com/?q={searchTerms}"
 
 logger = logging.getLogger("attendance.live_browser")
 
@@ -102,15 +106,68 @@ def ensure_started(url: str | None = None) -> None:
     ensure_login_browser(url)
 
 
+def _write_duckduckgo_prefs(profile: Path) -> None:
+    """Use DuckDuckGo (not Google) so Railway IPs are not stuck on Google CAPTCHAs."""
+    default_dir = profile / "Default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    prefs_path = default_dir / "Preferences"
+    prefs: dict = {}
+    if prefs_path.exists():
+        try:
+            prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+        except Exception:
+            prefs = {}
+    prefs.setdefault("browser", {})
+    prefs["browser"]["has_seen_welcome_page"] = True
+    prefs["browser"]["check_default_browser"] = False
+    prefs["browser"]["show_home_button"] = True
+    prefs["homepage"] = KAUSHAL_HOME
+    prefs["homepage_is_newtabpage"] = False
+    prefs["session"] = {
+        "restore_on_startup": 4,  # open URLs listed below
+        "startup_urls": [KAUSHAL_HOME],
+    }
+    prefs["default_search_provider_data"] = {
+        "template_url_data": {
+            "short_name": "DuckDuckGo",
+            "keyword": "duckduckgo.com",
+            "favicon_url": "https://duckduckgo.com/favicon.ico",
+            "url": DUCKDUCKGO_SEARCH,
+            "safe_for_autoreplace": True,
+            "new_tab_url": "https://duckduckgo.com/chrome_newtab",
+            "contextual_search_url": "",
+            "image_url": "",
+            "search_url_post_params": "",
+            "suggest_url": "https://duckduckgo.com/ac/?q={searchTerms}&type=list",
+            "instant_url": "",
+            "image_url_post_params": "",
+            "alternate_urls": [],
+            "input_encodings": ["UTF-8"],
+            "prepopulate_id": 0,
+            "created_by_policy": False,
+        }
+    }
+    prefs.setdefault("search", {})
+    prefs["search"]["suggest_enabled"] = False
+    # Reduce Google services prompts inside Chromium.
+    prefs.setdefault("signin", {})
+    prefs["signin"]["allowed"] = False
+    prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
+
+
 def _start(url: str, *, debug: bool) -> None:
     global _proc, _debug_enabled
     display = os.environ.get("DISPLAY", ":99")
     profile = browser_profile_dir()
     profile.mkdir(parents=True, exist_ok=True)
     _clear_profile_locks(profile)
+    _write_duckduckgo_prefs(profile)
     chromium = find_chromium()
     env = os.environ.copy()
     env["DISPLAY"] = display
+    start_url = KAUSHAL_HOME if "kaushal.dord.gov.in" in (url or "") or not url else url
+    if "google." in start_url:
+        start_url = KAUSHAL_HOME
     args = [
         chromium,
         f"--user-data-dir={profile}",
@@ -123,13 +180,14 @@ def _start(url: str, *, debug: bool) -> None:
         "--window-position=0,0",
         "--start-maximized",
         "--lang=en-IN",
+        f"--homepage={KAUSHAL_HOME}",
         "--disable-blink-features=AutomationControlled",
         "--disable-infobars",
         "--disable-notifications",
+        "--disable-features=ChromeWhatsNewUI,PrivacySandboxSettings4",
         "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        # Always open the real portal homepage (avoids stuck API JSON 401 tabs).
-        "https://kaushal.dord.gov.in/",
+        start_url,
     ]
     if debug:
         args.extend(
