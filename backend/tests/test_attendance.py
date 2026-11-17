@@ -489,6 +489,60 @@ def test_excel_import_ignores_dates_before_batch_start():
     assert [row["attendance_date"] for row in kept] == ["2026-10-16", "2026-10-17"]
 
 
+def test_parse_candidate_punch_excel_skips_title_row(tmp_path):
+    from openpyxl import Workbook
+
+    from app.portal_parse import parse_candidate_punch_excel
+
+    path = tmp_path / "Candidate_Attendance_Report.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Candidate Attendance Report"])
+    ws.append(
+        [
+            "Sr. No.",
+            "Candidate ID",
+            "Attendance ID",
+            "Batch Reg No.",
+            "Consume Date",
+            "Log Date",
+            "In Time",
+            "In Device ID",
+            "Out Time",
+            "Out Device ID",
+            "Latitude",
+            "Longitude",
+            "Location",
+        ]
+    )
+    ws.append(
+        [
+            1,
+            "2628750937",
+            "96055455",
+            "BT26D023667",
+            "16-10-2026",
+            "16-10-2026",
+            "16-10-2026 10:31:01",
+            "146037",
+            "16-10-2026 18:07:46",
+            "146154",
+            "15.5029",
+            "80.0455",
+            "KKERS",
+        ]
+    )
+    wb.save(path)
+
+    punches, warnings = parse_candidate_punch_excel(path)
+    assert warnings == []
+    assert len(punches) == 1
+    assert punches[0]["candidate_id"] == "2628750937"
+    assert punches[0]["attendance_date"] == "2026-10-16"
+    assert punches[0]["in_time"] == "10:31:01"
+    assert punches[0]["out_time"] == "18:07:46"
+
+
 def test_candidate_id_punch_table_builds_present_and_absent():
     headers = [
         "Sr. No.",

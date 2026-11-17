@@ -251,11 +251,42 @@ def parse_candidate_punch_table(
 
 
 def parse_candidate_punch_excel(path: object) -> tuple[list[dict], list[str]]:
-    """Parse a portal 'Download Excel' file from the Candidate ID report."""
+    """Parse a portal 'Download Excel' file from the Candidate ID report.
+
+    Kaushal files often start with a title row ("Candidate Attendance Report")
+    before the real header row, so we locate the header by column names.
+    """
     import pandas as pd
 
-    frame = pd.read_excel(path, dtype=str)
+    frame = pd.read_excel(path, dtype=str, header=None)
     frame = frame.fillna("")
-    headers = [str(column) for column in frame.columns]
-    rows = frame.astype(str).values.tolist()
+    matrix = frame.astype(str).values.tolist()
+    if not matrix:
+        return [], ["Excel file is empty."]
+
+    header_index = _find_candidate_punch_header_row(matrix)
+    if header_index is None:
+        # Fallback: first row as headers (older flat exports).
+        headers = [str(cell) for cell in matrix[0]]
+        rows = matrix[1:]
+        return parse_candidate_punch_table(headers, rows)
+
+    headers = [str(cell) for cell in matrix[header_index]]
+    rows = matrix[header_index + 1 :]
     return parse_candidate_punch_table(headers, rows)
+
+
+def _find_candidate_punch_header_row(matrix: list[list[object]]) -> Optional[int]:
+    """Return the row index that looks like the Candidate Attendance header."""
+    best_index: Optional[int] = None
+    best_score = 0
+    for index, row in enumerate(matrix[:30]):
+        mapping = header_map(row, CANDIDATE_PUNCH_HEADERS)
+        fields = set(mapping.values())
+        score = len(fields)
+        has_id = "candidate_id" in fields or "attendance_id" in fields
+        has_day = "consume_date" in fields or "in_time" in fields or "log_date" in fields
+        if has_id and has_day and score > best_score:
+            best_index = index
+            best_score = score
+    return best_index
