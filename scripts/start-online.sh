@@ -48,10 +48,10 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   sleep 1
 done
 
-# Normal Chromium (not Playwright-controlled) for live Kaushal login in noVNC.
+# Normal Chromium for live Kaushal login (no remote-debugging until after login).
 python - <<'PY' >/tmp/live-browser-boot.log 2>&1 &
-from app.live_browser import ensure_started
-ensure_started()
+from app.live_browser import ensure_login_browser
+ensure_login_browser()
 PY
 
 exec nginx -g 'daemon off;' -c /tmp/nginx.conf

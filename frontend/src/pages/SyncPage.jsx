@@ -86,7 +86,7 @@ export default function SyncPage() {
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
           {remoteBrowser
-            ? "Live only: use the Kaushal window below (normal Chrome, not a bot window). Sign in with CAPTCHA, click “I have logged in”, then sync runs online. Official attendance is never edited."
+            ? "Live only: sign into Kaushal in the window below (normal Chrome). If you see Unauthorized, click Stop sync, start again, and use only the Kaushal login page — then “I have logged in”. Official attendance is never edited."
             : "Sync opens the official Kaushal login on this computer. Sign in yourself, then continue. Official attendance is never edited."}{" "}
           You can check one date, a date range, or all dates.
         </p>
@@ -124,6 +124,19 @@ export default function SyncPage() {
           {running && (
             <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
               Stop sync
+            </button>
+          )}
+          {remoteBrowser && (
+            <button
+              type="button"
+              className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold"
+              onClick={() =>
+                api("/api/sync/reopen-browser", { method: "POST" })
+                  .then(() => setError(""))
+                  .catch((err) => setError(err.message))
+              }
+            >
+              Reload Kaushal login
             </button>
           )}
           {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (

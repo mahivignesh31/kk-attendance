@@ -36,10 +36,10 @@ async def lifespan(_app: FastAPI):
     mark_interrupted_syncs()
     try:
         from .config import remote_display_enabled
-        from .live_browser import ensure_started
+        from .live_browser import ensure_login_browser
 
         if remote_display_enabled():
-            ensure_started()
+            ensure_login_browser()
     except Exception:
         logger.exception("Live Kaushal browser did not start at boot")
     yield

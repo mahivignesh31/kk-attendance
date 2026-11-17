@@ -653,6 +653,19 @@ def sync_login_done():
     return {"ok": True}
 
 
+@router.post("/sync/reopen-browser")
+def sync_reopen_browser():
+    """Reset the live Chromium to the Kaushal login page (clears stuck 401 tabs)."""
+    from .config import remote_display_enabled
+    from .live_browser import ensure_login_browser, stop
+
+    if not remote_display_enabled():
+        raise HTTPException(status_code=400, detail="Live browser is only available on the online server.")
+    stop()
+    ensure_login_browser(fresh=True)
+    return {"ok": True, "remote_browser_path": "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"}
+
+
 @router.get("/reconciliation")
 def reconciliation(resolved: int = 0):
     with read_conn() as conn:

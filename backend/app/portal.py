@@ -210,14 +210,13 @@ class PortalClient:
             logger.info("Could not bring the portal window to the front")
 
     def _open_remote_cdp(self, force: bool = False) -> None:
-        """Attach to the always-on live Chromium after the admin has logged in."""
-        from .live_browser import cdp_endpoint, cdp_ready, ensure_started
+        """Attach to live Chromium after login (CDP enabled only post-login)."""
+        from .live_browser import cdp_endpoint, cdp_ready, enable_debugging
 
-        ensure_started(PORTAL_LOGIN_URL)
         if self.alive() and not force:
             return
-        if not cdp_ready(timeout=2.0):
-            ensure_started(PORTAL_LOGIN_URL)
+        if not cdp_ready(timeout=1.0):
+            enable_debugging(PORTAL_LOGIN_URL)
         self._disconnect_playwright()
         try:
             from playwright.sync_api import sync_playwright
@@ -322,29 +321,40 @@ class PortalClient:
     def prepare_report(self, batch: dict, sync_id: int) -> list[str]:
         """Open the Candidate ID attendance report (fast punch-history sync)."""
         from .config import remote_display_enabled
-        from .live_browser import ensure_started
+        from .live_browser import enable_debugging, ensure_login_browser
 
         self.batch = batch
         self.sync_id = sync_id
         remote = remote_display_enabled()
         if remote:
-            # Start a normal Chromium first (no automation bar). Admin logs in via noVNC.
+            # 1) Normal Chrome for login (no remote-debugging — avoids portal 401 blocks).
+            # 2) After “I have logged in”, restart same profile with CDP and scrape.
             self.manager.update(
                 sync_id,
                 progress_step="connecting",
-                message="Starting the live Kaushal window — use it below to sign in",
+                message="Opening live Kaushal login — sign in in the window below",
             )
-            ensure_started(PORTAL_LOGIN_URL)
+            ensure_login_browser(PORTAL_LOGIN_URL, fresh=True)
             self._wait_for_remote_login_click()
+            self.manager.update(sync_id, message="Saving your login and preparing to read attendance")
+            enable_debugging(PORTAL_LOGIN_URL)
             self.open_browser()
             if self._login_form_visible() or not self._authenticated():
+                self._disconnect_playwright()
+                ensure_login_browser(PORTAL_LOGIN_URL)
                 self.manager.update(
                     sync_id,
                     status="awaiting_login",
                     progress_step="awaiting_login",
-                    message="Finish Kaushal login in the live window, then click “I have logged in” again.",
+                    message="Kaushal still needs login. Sign in below, then click “I have logged in” again.",
                 )
-                self._wait_for_manual_login()
+                self._wait_for_remote_login_click()
+                enable_debugging(PORTAL_LOGIN_URL)
+                self.open_browser()
+                if self._login_form_visible() or not self._authenticated():
+                    raise PortalError(
+                        "Kaushal login was not detected. Sign in fully in the live window, then click “I have logged in”."
+                    )
         else:
             self.open_browser()
             self.manager.update(sync_id, progress_step="connecting", message="Opening the Kaushal portal")
