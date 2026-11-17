@@ -25,6 +25,16 @@ BROWSER_PROFILE = browser_profile_dir()
 def remote_display_enabled() -> bool:
     return os.environ.get("ATTENDANCE_REMOTE_DISPLAY", "").strip().lower() in {"1", "true", "yes"}
 
+
+def user_chrome_cdp_url() -> str:
+    """Local Google Chrome DevTools endpoint (your normal Chrome on this Mac)."""
+    return os.environ.get("ATTENDANCE_CDP_URL", "http://127.0.0.1:9222").rstrip("/")
+
+
+def cloud_portal_sync_blocked() -> bool:
+    """Online hosts cannot see the administrator’s Mac Chrome."""
+    return os.environ.get("ATTENDANCE_BLOCK_CLOUD_SYNC", "").strip().lower() in {"1", "true", "yes"}
+
 PORTAL_HOME = "https://kaushal.dord.gov.in/"
 PORTAL_LOGIN_URL = "https://kaushal.dord.gov.in/"
 PORTAL_REPORT_URL = "https://kaushal.dord.gov.in/#/landing-page/candidate-attendance-report"

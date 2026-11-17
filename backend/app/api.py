@@ -13,7 +13,13 @@ from pydantic import BaseModel, Field
 
 from .auth import actor, bind_user, hash_password, public_account
 from .calculator import now_iso, validate_rules
-from .config import DEFAULT_BATCH, PORTAL_REPORT_URL, RESET_PHRASE, remote_display_enabled
+from .config import (
+    DEFAULT_BATCH,
+    PORTAL_REPORT_URL,
+    RESET_PHRASE,
+    cloud_portal_sync_blocked,
+    remote_display_enabled,
+)
 from .db import get_json, read_conn, set_json, transaction, upsert_batch
 from .exporter import workbook_response
 from .importer import import_workbook
@@ -80,7 +86,9 @@ def health():
         "status": "ok",
         "portal": PORTAL_REPORT_URL,
         "writes_to_portal": False,
-        "remote_browser": remote_display_enabled(),
+        "remote_browser": False,
+        "cloud_sync_blocked": cloud_portal_sync_blocked(),
+        "chrome_sync": True,
     }
 
 
@@ -125,13 +133,10 @@ def bootstrap():
         "open_issues": issues,
         "sync": dict(current) if current else None,
         "portal_url": PORTAL_REPORT_URL,
-        "remote_browser": remote_display_enabled(),
-        # noVNC live desktop — log into Kaushal here when syncing online.
-        "remote_browser_path": (
-            "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"
-            if remote_display_enabled()
-            else None
-        ),
+        "remote_browser": False,
+        "remote_browser_path": None,
+        "cloud_sync_blocked": cloud_portal_sync_blocked(),
+        "chrome_sync": True,
     }
 
 
@@ -618,6 +623,15 @@ def sync_history():
 
 @router.post("/sync/start")
 def sync_start(body: SyncBody):
+    if cloud_portal_sync_blocked():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Portal sync uses your normal Chrome on this Mac. "
+                "Open http://127.0.0.1:8000 locally, run scripts/open-kaushal-chrome.sh, "
+                "sign into Kaushal, then start sync. This online site is for viewing reports."
+            ),
+        )
     if body.mode not in {"incremental", "range", "full"}:
         raise HTTPException(status_code=400, detail="Sync mode must be incremental, range, or full.")
     date_from = body.date_from

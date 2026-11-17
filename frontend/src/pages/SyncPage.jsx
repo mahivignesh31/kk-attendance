@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, apiUrl } from "../api";
+import { api } from "../api";
 import { stamp } from "../utils";
 
 const STEPS = [
-  ["connecting", "Connecting to Portal"],
-  ["awaiting_login", "Waiting for administrator login"],
+  ["connecting", "Connecting to your Chrome"],
+  ["awaiting_login", "Waiting for Kaushal login in Chrome"],
   ["loading_report", "Loading Attendance Report"],
   ["discovering_dates", "Discovering Dates"],
   ["processing_dates", "Processing Dates"],
@@ -22,8 +22,7 @@ export default function SyncPage() {
   const [dateTo, setDateTo] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [remoteBrowser, setRemoteBrowser] = useState(false);
-  const [remoteBrowserPath, setRemoteBrowserPath] = useState("");
+  const [cloudSyncBlocked, setCloudSyncBlocked] = useState(false);
 
   const refresh = () => {
     api("/api/sync/current").then((payload) => setCurrent(payload.sync)).catch((err) => setError(err.message));
@@ -32,10 +31,7 @@ export default function SyncPage() {
 
   useEffect(() => {
     api("/api/bootstrap")
-      .then((payload) => {
-        setRemoteBrowser(Boolean(payload.remote_browser));
-        setRemoteBrowserPath(payload.remote_browser_path || "");
-      })
+      .then((payload) => setCloudSyncBlocked(Boolean(payload.cloud_sync_blocked)))
       .catch(() => {});
     refresh();
     const timer = setInterval(refresh, 1500);
@@ -44,11 +40,6 @@ export default function SyncPage() {
 
   const running = ["running", "awaiting_login", "cancelling"].includes(current?.status);
   const stepIndex = STEPS.findIndex((step) => step[0] === current?.progress_step);
-  const showLiveBrowser =
-    remoteBrowser &&
-    running &&
-    ["connecting", "awaiting_login", "loading_report", "extracting_records"].includes(current?.progress_step || "");
-  const browserSrc = remoteBrowserPath ? apiUrl(remoteBrowserPath) : "";
 
   async function start() {
     setError("");
@@ -85,58 +76,65 @@ export default function SyncPage() {
       <div>
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          {remoteBrowser
-            ? "Live only: sign into Kaushal in the window below (normal Chrome). If you see Unauthorized, click Stop sync, start again, and use only the Kaushal login page — then “I have logged in”. Official attendance is never edited."
-            : "Sync opens the official Kaushal login on this computer. Sign in yourself, then continue. Official attendance is never edited."}{" "}
-          You can check one date, a date range, or all dates.
+          Sync reads Kaushal from <span className="font-medium text-slate-700">your normal Google Chrome</span> on this Mac.
+          Official attendance is never edited. Online Railway/Vercel is for viewing reports after you sync here.
         </p>
       </div>
 
+      {cloudSyncBlocked ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-950">
+          <p className="font-semibold">Portal sync runs on your Mac, not on this online site.</p>
+          <ol className="mt-3 list-decimal space-y-1 pl-5">
+            <li>On this computer open <span className="font-medium">http://127.0.0.1:8000</span></li>
+            <li>Run <span className="font-medium">scripts/open-kaushal-chrome.sh</span> (opens your Chrome)</li>
+            <li>Sign into Kaushal in Chrome</li>
+            <li>Start sync here on localhost, then click <span className="font-medium">I have logged in</span></li>
+          </ol>
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-plum-100 bg-plum-50 p-5 text-sm leading-6 text-plum-900">
+          <p className="font-semibold">Before sync</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5">
+            <li>Run <span className="font-medium">scripts/open-kaushal-chrome.sh</span> in Terminal (uses your Chrome)</li>
+            <li>Sign into Kaushal in that Chrome window</li>
+            <li>Choose one date / range / all dates below and start</li>
+            <li>Click <span className="font-medium">I have logged in</span> when asked</li>
+          </ol>
+        </section>
+      )}
+
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <div className="flex flex-wrap gap-4 text-sm">
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> Check one date</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} /> Check a date range</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> Check all dates</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} disabled={cloudSyncBlocked} /> Check one date</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} disabled={cloudSyncBlocked} /> Check a date range</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} disabled={cloudSyncBlocked} /> Check all dates</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} disabled={cloudSyncBlocked} /> New dates only</label>
         </div>
         {mode === "date" && (
           <div className="mt-4">
             <label className="mb-1 block text-xs font-medium text-slate-500">Date to check</label>
-            <input type="date" aria-label="Date to check" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            <input type="date" aria-label="Date to check" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} disabled={cloudSyncBlocked} />
           </div>
         )}
         {mode === "range" && (
           <div className="mt-4 flex flex-wrap gap-3">
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">From</label>
-              <input type="date" aria-label="Range start" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+              <input type="date" aria-label="Range start" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} disabled={cloudSyncBlocked} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">To</label>
-              <input type="date" aria-label="Range end" className="rounded-xl border border-plum-100 px-3 py-2" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+              <input type="date" aria-label="Range end" className="rounded-xl border border-plum-100 px-3 py-2" value={dateTo} onChange={(event) => setDateTo(event.target.value)} disabled={cloudSyncBlocked} />
             </div>
           </div>
         )}
         <div className="mt-5 flex flex-wrap gap-3">
-          <button type="button" disabled={busy || running} onClick={start} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+          <button type="button" disabled={busy || running || cloudSyncBlocked} onClick={start} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
             {mode === "date" ? "CHECK THIS DATE" : mode === "range" ? "CHECK THIS RANGE" : mode === "full" ? "CHECK ALL DATES" : "SYNC NEW DATES"}
           </button>
           {running && (
             <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
               Stop sync
-            </button>
-          )}
-          {remoteBrowser && (
-            <button
-              type="button"
-              className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold"
-              onClick={() =>
-                api("/api/sync/reopen-browser", { method: "POST" })
-                  .then(() => setError(""))
-                  .catch((err) => setError(err.message))
-              }
-            >
-              Reload Kaushal login
             </button>
           )}
           {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
@@ -147,36 +145,6 @@ export default function SyncPage() {
         </div>
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
       </section>
-
-      {remoteBrowser && (
-        <section className="rounded-2xl bg-white p-5 shadow-card">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">Live Kaushal window</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                {showLiveBrowser
-                  ? "This is a real Chrome on the server. Log into Kaushal here, then click “I have logged in”."
-                  : "Live Chrome stays here for Kaushal. Start a sync, sign in in this window, then click “I have logged in”."}
-              </p>
-            </div>
-            {browserSrc && (
-              <a href={browserSrc} target="_blank" rel="noreferrer" className="text-sm font-semibold text-plum-700">
-                Open in new tab
-              </a>
-            )}
-          </div>
-          {browserSrc ? (
-            <iframe
-              title="Kaushal portal live browser"
-              src={browserSrc}
-              className="mt-4 h-[70vh] min-h-[420px] w-full rounded-xl border border-plum-100 bg-slate-900"
-              allow="clipboard-read; clipboard-write"
-            />
-          ) : (
-            <p className="mt-4 text-sm text-slate-500">Remote browser is not available on this server yet.</p>
-          )}
-        </section>
-      )}
 
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <h2 className="font-semibold">Progress</h2>
