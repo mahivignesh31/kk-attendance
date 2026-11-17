@@ -684,6 +684,63 @@ def sync_reopen_browser():
     return {"ok": True, "remote_browser_path": "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"}
 
 
+@router.post("/sync/upload-excel")
+async def sync_upload_excel(
+    files: list[UploadFile] = File(...),
+    mode: str = Form("full"),
+    date_from: str | None = Form(None),
+    date_to: str | None = Form(None),
+):
+    """Import Candidate Attendance Report Excel files downloaded from Kaushal."""
+    from .excel_sync import import_punch_excels
+    from .reporting import load_context
+
+    if mode not in {"incremental", "range", "full"}:
+        raise HTTPException(status_code=400, detail="Mode must be incremental, range, or full.")
+    if mode == "range":
+        if date_from and not date_to:
+            date_to = date_from
+        if not date_from or not date_to:
+            raise HTTPException(status_code=400, detail="Choose a start and end date for range import.")
+        if date_from > date_to:
+            raise HTTPException(status_code=400, detail="The range start is after the range end.")
+    if mode == "date":
+        mode = "range"
+
+    with read_conn() as conn:
+        batch_code = (load_context(conn)["batch"] or {}).get("batch_code") or None
+    if _user().get("role") == "centre" and not batch_code:
+        raise HTTPException(status_code=400, detail="Create a batch before uploading attendance.")
+
+    saved_paths: list[Path] = []
+    try:
+        for upload in files:
+            name = (upload.filename or "punches.xlsx").lower()
+            if not (name.endswith(".xlsx") or name.endswith(".xls")):
+                raise HTTPException(status_code=400, detail=f"{upload.filename or 'file'} must be an Excel .xlsx file.")
+            contents = await upload.read()
+            if not contents:
+                raise HTTPException(status_code=400, detail=f"{upload.filename or 'file'} is empty.")
+            suffix = ".xlsx" if name.endswith(".xlsx") else ".xls"
+            handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            handle.write(contents)
+            handle.close()
+            saved_paths.append(Path(handle.name))
+        try:
+            return import_punch_excels(
+                saved_paths,
+                mode=mode,
+                date_from=date_from,
+                date_to=date_to,
+                batch_code=batch_code,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+
+
 @router.get("/reconciliation")
 def reconciliation(resolved: int = 0):
     with read_conn() as conn:

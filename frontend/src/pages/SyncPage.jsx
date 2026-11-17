@@ -17,13 +17,16 @@ const STEPS = [
 export default function SyncPage() {
   const [current, setCurrent] = useState(null);
   const [history, setHistory] = useState([]);
-  const [mode, setMode] = useState("date");
+  const [mode, setMode] = useState("full");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState([]);
   const [remoteBrowser, setRemoteBrowser] = useState(false);
   const [remoteBrowserPath, setRemoteBrowserPath] = useState("");
+  const [showLive, setShowLive] = useState(false);
 
   const refresh = () => {
     api("/api/sync/current").then((payload) => setCurrent(payload.sync)).catch((err) => setError(err.message));
@@ -46,17 +49,51 @@ export default function SyncPage() {
   const stepIndex = STEPS.findIndex((step) => step[0] === current?.progress_step);
   const browserSrc = remoteBrowserPath ? apiUrl(remoteBrowserPath) : "";
 
-  async function start() {
+  async function uploadExcel() {
     setError("");
+    setMessage("");
+    if (!files.length) {
+      setError("Choose one or more Excel files from Kaushal (Download Excel).");
+      return;
+    }
     if (mode === "date" && !dateFrom) {
-      setError("Choose the date to check.");
+      setError("Choose the date to import.");
       return;
     }
     if (mode === "range" && (!dateFrom || !dateTo)) {
       setError("Choose the start date and the end date.");
       return;
     }
-    if (mode === "full" && !window.confirm("Check all dates re-reads every punch date found for this batch. Official portal attendance is never changed. Continue?")) {
+    const payloadMode = mode === "date" ? "range" : mode;
+    const from = mode === "incremental" ? "" : dateFrom || "";
+    const to = mode === "date" ? dateFrom : mode === "range" ? dateTo : "";
+    const body = new FormData();
+    for (const file of files) body.append("files", file);
+    body.append("mode", payloadMode);
+    if (from) body.append("date_from", from);
+    if (to) body.append("date_to", to);
+    setBusy(true);
+    try {
+      const result = await api("/api/sync/upload-excel", { method: "POST", body });
+      setMessage(result.message || "Excel import completed.");
+      setFiles([]);
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startLive() {
+    setError("");
+    setMessage("");
+    if (mode === "date" && !dateFrom) {
+      setError("Choose the date to check.");
+      return;
+    }
+    if (mode === "range" && (!dateFrom || !dateTo)) {
+      setError("Choose the start date and the end date.");
       return;
     }
     const payloadMode = mode === "date" ? "range" : mode;
@@ -68,6 +105,7 @@ export default function SyncPage() {
         method: "POST",
         body: JSON.stringify({ mode: payloadMode, date_from: from, date_to: to }),
       });
+      setShowLive(true);
       refresh();
     } catch (err) {
       setError(err.message);
@@ -81,92 +119,97 @@ export default function SyncPage() {
       <div>
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          {remoteBrowser
-            ? "Sync runs on this online site. Use the live Kaushal window below to sign in, then click “I have logged in”. Official attendance is never edited."
-            : "Sync uses Chrome on this computer. Sign into Kaushal, then continue. Official attendance is never edited."}{" "}
-          You can check one date, a date range, or all dates.
+          Upload Kaushal <span className="font-medium text-slate-700">Download Excel</span> files here (works on the online site).
+          Official attendance is never edited.
         </p>
       </div>
 
       <section className="rounded-2xl bg-white p-5 shadow-card">
-        <div className="flex flex-wrap gap-4 text-sm">
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> Check one date</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} /> Check a date range</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> Check all dates</label>
+        <h2 className="font-semibold">Upload Kaushal Excel</h2>
+        <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
+          <li>Open Kaushal in your normal browser and sign in</li>
+          <li>Go to Candidate Attendance Report → enter Candidate ID → Submit</li>
+          <li>Click <span className="font-medium">Download Excel</span> (repeat for other candidates if needed)</li>
+          <li>Upload the Excel file(s) below</li>
+        </ol>
+
+        <div className="mt-5 flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> All dates in file</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> One date</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} /> Date range</label>
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only</label>
         </div>
         {mode === "date" && (
           <div className="mt-4">
-            <label className="mb-1 block text-xs font-medium text-slate-500">Date to check</label>
-            <input type="date" aria-label="Date to check" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            <label className="mb-1 block text-xs font-medium text-slate-500">Date to import</label>
+            <input type="date" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           </div>
         )}
         {mode === "range" && (
           <div className="mt-4 flex flex-wrap gap-3">
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">From</label>
-              <input type="date" aria-label="Range start" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+              <input type="date" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-500">To</label>
-              <input type="date" aria-label="Range end" className="rounded-xl border border-plum-100 px-3 py-2" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+              <input type="date" className="rounded-xl border border-plum-100 px-3 py-2" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
             </div>
           </div>
         )}
-        <div className="mt-5 flex flex-wrap gap-3">
-          <button type="button" disabled={busy || running} onClick={start} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
-            {mode === "date" ? "CHECK THIS DATE" : mode === "range" ? "CHECK THIS RANGE" : mode === "full" ? "CHECK ALL DATES" : "SYNC NEW DATES"}
-          </button>
-          {running && (
-            <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
-              Stop sync
-            </button>
-          )}
-          {remoteBrowser && (
-            <button
-              type="button"
-              className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold"
-              onClick={() =>
-                api("/api/sync/reopen-browser", { method: "POST" })
-                  .then(() => setError(""))
-                  .catch((err) => setError(err.message))
-              }
-            >
-              Reload Kaushal login
-            </button>
-          )}
-          {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
-            <button type="button" className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold" onClick={() => api("/api/sync/login-done", { method: "POST" })}>
-              I have logged in
-            </button>
+
+        <div className="mt-5">
+          <input
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            multiple
+            onChange={(event) => setFiles(Array.from(event.target.files || []))}
+            className="block w-full text-sm text-slate-600"
+          />
+          {files.length > 0 && (
+            <p className="mt-2 text-xs text-slate-500">{files.length} file(s) selected</p>
           )}
         </div>
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button type="button" disabled={busy || running} onClick={uploadExcel} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+            UPLOAD EXCEL &amp; IMPORT
+          </button>
+        </div>
+        {message && <p className="mt-3 text-sm text-emerald-700">{message}</p>}
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
       </section>
 
       {remoteBrowser && (
         <section className="rounded-2xl bg-white p-5 shadow-card">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">Live Kaushal window</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Sign into Kaushal here. Do not use Google in this window (Railway IPs get blocked). Search uses DuckDuckGo. If stuck, click Reload Kaushal login.
-              </p>
+          <button type="button" className="text-sm font-semibold text-plum-700" onClick={() => setShowLive((value) => !value)}>
+            {showLive ? "Hide live window (often blocked by Kaushal)" : "Show live window (optional — often returns 401)"}
+          </button>
+          {showLive && (
+            <div className="mt-4">
+              <div className="mb-4 flex flex-wrap gap-3">
+                <button type="button" disabled={busy || running} onClick={startLive} className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold disabled:opacity-50">
+                  Start live sync
+                </button>
+                {running && (
+                  <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
+                    Stop sync
+                  </button>
+                )}
+                <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/reopen-browser", { method: "POST" }).catch((err) => setError(err.message))}>
+                  Reload Kaushal login
+                </button>
+                {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
+                  <button type="button" className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold" onClick={() => api("/api/sync/login-done", { method: "POST" })}>
+                    I have logged in
+                  </button>
+                )}
+              </div>
+              {browserSrc ? (
+                <iframe title="Kaushal portal live browser" src={browserSrc} className="h-[60vh] min-h-[360px] w-full rounded-xl border border-plum-100 bg-slate-900" allow="clipboard-read; clipboard-write" />
+              ) : null}
             </div>
-            {browserSrc && (
-              <a href={browserSrc} target="_blank" rel="noreferrer" className="text-sm font-semibold text-plum-700">
-                Open in new tab
-              </a>
-            )}
-          </div>
-          {browserSrc ? (
-            <iframe
-              title="Kaushal portal live browser"
-              src={browserSrc}
-              className="mt-4 h-[70vh] min-h-[420px] w-full rounded-xl border border-plum-100 bg-slate-900"
-              allow="clipboard-read; clipboard-write"
-            />
-          ) : null}
+          )}
         </section>
       )}
 
