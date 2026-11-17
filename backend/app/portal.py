@@ -22,6 +22,7 @@ from .config import (
     PORTAL_LOGIN_URL,
     PORTAL_REPORT_URL,
     SCREENSHOT_DIR,
+    browser_profile_dir,
 )
 from .portal_parse import (
     detail_key,
@@ -160,19 +161,32 @@ class PortalClient:
         except ImportError as exc:
             raise PortalError("Playwright is not installed. Run `python -m playwright install chromium`.") from exc
         self._discard_browser()
-        BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
+        profile = browser_profile_dir()
+        profile.mkdir(parents=True, exist_ok=True)
         self._release_profile_lock()
         self.playwright = sync_playwright().start()
         try:
+            # Online (Railway): headed Chromium on Xvfb so the admin can log in via noVNC.
+            # Local: headed unless ATTENDANCE_HEADLESS=1.
             headless = os.environ.get("ATTENDANCE_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
+            launch_args = [
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--window-size=1440,900",
+                "--window-position=0,0",
+            ]
             self.context = self.playwright.chromium.launch_persistent_context(
-                user_data_dir=str(BROWSER_PROFILE),
+                user_data_dir=str(profile),
                 headless=headless,
                 locale="en-IN",
                 timezone_id="Asia/Kolkata",
                 viewport={"width": 1440, "height": 900},
                 accept_downloads=True,
-                args=["--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage"],
+                args=launch_args,
             )
         except Exception as exc:
             self._discard_browser()
@@ -213,9 +227,10 @@ class PortalClient:
         import signal
         import subprocess
 
-        profile = str(BROWSER_PROFILE)
+        profile = browser_profile_dir()
+        profile_text = str(profile)
         try:
-            listed = subprocess.run(["pgrep", "-fl", profile], capture_output=True, text=True, check=False)
+            listed = subprocess.run(["pgrep", "-fl", profile_text], capture_output=True, text=True, check=False)
         except Exception:
             listed = None
         killed = False
@@ -239,7 +254,7 @@ class PortalClient:
             time.sleep(0.6)
         for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
             try:
-                (BROWSER_PROFILE / name).unlink(missing_ok=True)
+                (profile / name).unlink(missing_ok=True)
             except OSError:
                 logger.info("Could not remove the browser profile lock %s", name)
 
@@ -248,7 +263,16 @@ class PortalClient:
         self.batch = batch
         self.sync_id = sync_id
         self.open_browser()
-        self.manager.update(sync_id, progress_step="connecting", message="Opening the Kaushal portal")
+        remote = os.environ.get("ATTENDANCE_REMOTE_DISPLAY", "").strip().lower() in {"1", "true", "yes"}
+        self.manager.update(
+            sync_id,
+            progress_step="connecting",
+            message=(
+                "Opening the Kaushal portal in the live window below — sign in there"
+                if remote
+                else "Opening the Kaushal portal"
+            ),
+        )
         if not self._on_candidate_details():
             self._goto(PORTAL_CANDIDATE_DETAILS_URL)
             self._wait_for_app()
@@ -501,11 +525,16 @@ class PortalClient:
             raise PortalError("Lost the Candidate ID report page. Open it again and restart sync.")
 
     def _wait_for_manual_login(self) -> None:
+        remote = os.environ.get("ATTENDANCE_REMOTE_DISPLAY", "").strip().lower() in {"1", "true", "yes"}
         self.manager.update(
             self.sync_id,
             status="awaiting_login",
             progress_step="awaiting_login",
-            message="Please log in to the official DDU-GKY Kaushal portal. Attendance synchronization will continue after successful authentication.",
+            message=(
+                "Log in to Kaushal in the live window on this page (CAPTCHA too), then click “I have logged in”."
+                if remote
+                else "Please log in to the official DDU-GKY Kaushal portal. Attendance synchronization will continue after successful authentication."
+            ),
         )
         deadline = time.time() + 20 * 60
         while time.time() < deadline:

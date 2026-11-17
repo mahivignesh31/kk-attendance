@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, apiUrl } from "../api";
 import { stamp } from "../utils";
 
 const STEPS = [
@@ -22,6 +22,8 @@ export default function SyncPage() {
   const [dateTo, setDateTo] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [remoteBrowser, setRemoteBrowser] = useState(false);
+  const [remoteBrowserPath, setRemoteBrowserPath] = useState("");
 
   const refresh = () => {
     api("/api/sync/current").then((payload) => setCurrent(payload.sync)).catch((err) => setError(err.message));
@@ -29,6 +31,12 @@ export default function SyncPage() {
   };
 
   useEffect(() => {
+    api("/api/bootstrap")
+      .then((payload) => {
+        setRemoteBrowser(Boolean(payload.remote_browser));
+        setRemoteBrowserPath(payload.remote_browser_path || "");
+      })
+      .catch(() => {});
     refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
@@ -36,6 +44,11 @@ export default function SyncPage() {
 
   const running = ["running", "awaiting_login", "cancelling"].includes(current?.status);
   const stepIndex = STEPS.findIndex((step) => step[0] === current?.progress_step);
+  const showLiveBrowser =
+    remoteBrowser &&
+    running &&
+    ["connecting", "awaiting_login", "loading_report", "extracting_records"].includes(current?.progress_step || "");
+  const browserSrc = remoteBrowserPath ? apiUrl(remoteBrowserPath) : "";
 
   async function start() {
     setError("");
@@ -72,7 +85,10 @@ export default function SyncPage() {
       <div>
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          Sync opens the official Kaushal login, then reads each Candidate ID punch history. Sign in yourself. Official attendance is never edited. You can cross-check one date, a date range, or all dates.
+          {remoteBrowser
+            ? "Online sync opens a live Kaushal window below. Log in there (CAPTCHA included), then click “I have logged in”. Reports stay on this site. Official attendance is never edited."
+            : "Sync opens the official Kaushal login on this computer. Sign in yourself, then continue. Official attendance is never edited."}{" "}
+          You can check one date, a date range, or all dates.
         </p>
       </div>
 
@@ -110,7 +126,7 @@ export default function SyncPage() {
               Stop sync
             </button>
           )}
-          {current?.status === "awaiting_login" && (
+          {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
             <button type="button" className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold" onClick={() => api("/api/sync/login-done", { method: "POST" })}>
               I have logged in
             </button>
@@ -118,6 +134,36 @@ export default function SyncPage() {
         </div>
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
       </section>
+
+      {remoteBrowser && (
+        <section className="rounded-2xl bg-white p-5 shadow-card">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Live Kaushal window</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {showLiveBrowser
+                  ? "Use this window to complete the government login. After you are in, click “I have logged in” above."
+                  : "Start a sync to open the portal browser here. Login stays on the server for later syncs when possible."}
+              </p>
+            </div>
+            {browserSrc && (
+              <a href={browserSrc} target="_blank" rel="noreferrer" className="text-sm font-semibold text-plum-700">
+                Open in new tab
+              </a>
+            )}
+          </div>
+          {browserSrc ? (
+            <iframe
+              title="Kaushal portal live browser"
+              src={browserSrc}
+              className="mt-4 h-[70vh] min-h-[420px] w-full rounded-xl border border-plum-100 bg-slate-900"
+              allow="clipboard-read; clipboard-write"
+            />
+          ) : (
+            <p className="mt-4 text-sm text-slate-500">Remote browser is not available on this server yet.</p>
+          )}
+        </section>
+      )}
 
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <h2 className="font-semibold">Progress</h2>

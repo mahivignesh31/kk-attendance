@@ -9,9 +9,21 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 PROJECT_DIR = BACKEND_DIR.parent
 DATA_DIR = BACKEND_DIR / "data"
 CANDIDATE_WORKBOOK = DATA_DIR / "Candidate_Details.xlsx"
-BROWSER_PROFILE = DATA_DIR / "browser-profile"
 SCREENSHOT_DIR = DATA_DIR / "sync-screenshots"
 LOG_PATH = DATA_DIR / "sync.log"
+
+
+def browser_profile_dir() -> Path:
+    override = os.environ.get("ATTENDANCE_BROWSER_PROFILE")
+    return Path(override) if override else (DATA_DIR / "browser-profile")
+
+
+# Kept as a Path for callers that import BROWSER_PROFILE directly.
+BROWSER_PROFILE = browser_profile_dir()
+
+
+def remote_display_enabled() -> bool:
+    return os.environ.get("ATTENDANCE_REMOTE_DISPLAY", "").strip().lower() in {"1", "true", "yes"}
 
 PORTAL_HOME = "https://kaushal.dord.gov.in/"
 PORTAL_LOGIN_URL = "https://kaushal.dord.gov.in/"

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from .auth import actor, bind_user, hash_password, public_account
 from .calculator import now_iso, validate_rules
-from .config import DEFAULT_BATCH, PORTAL_REPORT_URL, RESET_PHRASE
+from .config import DEFAULT_BATCH, PORTAL_REPORT_URL, RESET_PHRASE, remote_display_enabled
 from .db import get_json, read_conn, set_json, transaction, upsert_batch
 from .exporter import workbook_response
 from .importer import import_workbook
@@ -76,7 +76,12 @@ def _xlsx(buffer, filename: str) -> StreamingResponse:
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "portal": PORTAL_REPORT_URL, "writes_to_portal": False}
+    return {
+        "status": "ok",
+        "portal": PORTAL_REPORT_URL,
+        "writes_to_portal": False,
+        "remote_browser": remote_display_enabled(),
+    }
 
 
 @router.get("/bootstrap")
@@ -120,6 +125,13 @@ def bootstrap():
         "open_issues": issues,
         "sync": dict(current) if current else None,
         "portal_url": PORTAL_REPORT_URL,
+        "remote_browser": remote_display_enabled(),
+        # noVNC live desktop — log into Kaushal here when syncing online.
+        "remote_browser_path": (
+            "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"
+            if remote_display_enabled()
+            else None
+        ),
     }
 
 
