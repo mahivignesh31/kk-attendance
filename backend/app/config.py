@@ -16,6 +16,8 @@ LOG_PATH = DATA_DIR / "sync.log"
 PORTAL_HOME = "https://kaushal.dord.gov.in/"
 PORTAL_LOGIN_URL = "https://kaushal.dord.gov.in/"
 PORTAL_REPORT_URL = "https://kaushal.dord.gov.in/#/landing-page/candidate-attendance-report"
+# Faster sync path: one Candidate ID submit returns that person's full punch history.
+PORTAL_CANDIDATE_DETAILS_URL = "https://kaushal.dord.gov.in/#/landing-page/candidate-attendance-details"
 
 RESET_PHRASE = "RESET LOCAL ATTENDANCE"
 

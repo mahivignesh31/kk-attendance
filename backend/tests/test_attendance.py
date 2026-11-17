@@ -16,7 +16,8 @@ from app.calculator import (
 )
 from app.config import CANDIDATE_WORKBOOK, DEFAULT_RULES
 from app.matching import match_candidate
-from app.portal_parse import parse_detail_table, parse_summary_table
+from app.candidate_sync import build_date_payload, classify_day_rows, filter_dates, group_punches_by_date
+from app.portal_parse import parse_candidate_punch_table, parse_detail_table, parse_summary_table
 from app.reconcile import reconcile_date
 
 RULES = validate_rules(DEFAULT_RULES)
@@ -473,6 +474,87 @@ def test_recalculate_changes_local_status_only(tmp_path, monkeypatch):
     assert stored["official_status"] == "present"
     assert stored["calculated_status"] == "half_day"
     assert stored["qualifying_minutes"] == 360
+
+
+def test_candidate_id_punch_table_builds_present_and_absent():
+    headers = [
+        "Sr. No.",
+        "Candidate ID",
+        "Attendance ID",
+        "Batch Reg No.",
+        "Consume Date",
+        "Log Date",
+        "In Time",
+        "In Device ID",
+        "Out Time",
+        "Out Device ID",
+        "Latitude",
+        "Longitude",
+        "Location",
+    ]
+    rows = [
+        [
+            "1",
+            "2628076517",
+            "16190001",
+            "BT26D023667",
+            "16-10-2026",
+            "16-10-2026",
+            "16-10-2026 08:24:10",
+            "146037",
+            "16-10-2026 18:00:05",
+            "146037",
+            "15.5",
+            "80.0",
+            "KKEF",
+        ],
+        [
+            "2",
+            "2628076517",
+            "16180856",
+            "BT26D023667",
+            "15-10-2026",
+            "15-10-2026",
+            "15-10-2026 16:27:52",
+            "146037",
+            "15-10-2026 18:19:35",
+            "146037",
+            "15.5",
+            "80.0",
+            "KKEF",
+        ],
+    ]
+    punches, warnings = parse_candidate_punch_table(headers, rows)
+    assert warnings == []
+    assert punches[0]["attendance_date"] == "2026-10-16"
+    by_date = group_punches_by_date(punches)
+    assert set(by_date) == {"2026-10-15", "2026-10-16"}
+    category, result = classify_day_rows(by_date["2026-10-16"], day=date(2026, 10, 16), rules=RULES)
+    assert category == "present"
+    assert result.calculated_status == "full_day"
+    candidates = [
+        {"id": 1, "candidate_id": "2628076517", "name": "Test One", "sr_no": 1},
+        {"id": 2, "candidate_id": "9999999999", "name": "Test Two", "sr_no": 2},
+    ]
+    summary, details, opened, failed = build_date_payload(
+        attendance_day=date(2026, 10, 16),
+        day_punches=by_date["2026-10-16"],
+        candidates=candidates,
+        rules=RULES,
+    )
+    assert summary["present"] == 1
+    assert summary["absent"] == 1
+    assert summary["enrolled"] == 2
+    assert failed == set()
+    assert "present" in opened
+    assert any(row["category"] == "absent" and row["candidate_id"] == "9999999999" for row in details)
+    assert filter_dates(
+        ["2026-10-15", "2026-10-16"],
+        mode="incremental",
+        date_from=None,
+        date_to=None,
+        existing={"2026-10-15": {"detail_synced": 1}},
+    ) == ["2026-10-16"]
 
 
 def test_api_serves_candidates_exports_and_does_not_seed_attendance(tmp_path, monkeypatch):

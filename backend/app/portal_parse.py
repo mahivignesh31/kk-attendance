@@ -48,6 +48,30 @@ DETAIL_HEADERS = {
     "out device id": "out_device_id",
 }
 
+# Candidate Attendance Report (by Candidate ID) — punch history table.
+CANDIDATE_PUNCH_HEADERS = {
+    "sr no": "sr_no",
+    "s no": "sr_no",
+    "candidate id": "candidate_id",
+    "attendance id": "attendance_id",
+    "batch reg no": "batch_reg_no",
+    "batch registration number": "batch_reg_no",
+    "consume date": "consume_date",
+    "log date": "log_date",
+    "attendance date": "consume_date",
+    "date": "consume_date",
+    "in time": "in_time",
+    "in device id": "in_device_id",
+    "out time": "out_time",
+    "out device id": "out_device_id",
+    "latitude": "latitude",
+    "longitude": "longitude",
+    "location": "location",
+    "center name": "location",
+    "centre name": "location",
+    "location center name": "location",
+}
+
 
 def norm_header(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
@@ -169,3 +193,69 @@ def detail_key(row: dict) -> tuple:
         row.get("category") or "",
         row.get("sr_no") if row.get("sr_no") is not None else "",
     )
+
+
+def parse_candidate_punch_table(
+    headers: list[object],
+    rows: list[list[object]],
+) -> tuple[list[dict], list[str]]:
+    """Parse the Candidate ID attendance report (Consume Date + In/Out punches)."""
+    mapping = header_map(headers, CANDIDATE_PUNCH_HEADERS)
+    warnings: list[str] = []
+    fields = set(mapping.values())
+    if "candidate_id" not in fields and "attendance_id" not in fields:
+        return [], ["Candidate punch table has no Candidate ID or Attendance ID column."]
+    if "consume_date" not in fields and "in_time" not in fields:
+        return [], ["Candidate punch table has no Consume Date or In Time column."]
+    parsed: list[dict] = []
+    for row in rows:
+        if not any(clean_text(cell) for cell in row):
+            continue
+        projected = _project(headers, row, mapping)
+        day = (
+            parse_date(projected.get("consume_date"))
+            or parse_date(projected.get("log_date"))
+            or parse_date(projected.get("in_time"))
+        )
+        in_clock, in_invalid = parse_clock(projected.get("in_time"))
+        out_clock, out_invalid = parse_clock(projected.get("out_time"))
+        if day is None and not in_clock and not out_clock:
+            warnings.append(
+                f"Skipped a punch row with no readable date or time: {projected.get('consume_date') or 'blank'}."
+            )
+            continue
+        parsed.append(
+            {
+                "sr_no": parse_count(projected.get("sr_no")),
+                "candidate_id": clean_id(projected.get("candidate_id")),
+                "attendance_id": clean_id(projected.get("attendance_id")),
+                "batch_reg_no": clean_text(projected.get("batch_reg_no")) or None,
+                "attendance_date": day.isoformat() if day else None,
+                "portal_attendance_date": projected.get("consume_date") or projected.get("log_date") or None,
+                "consume_date": day.isoformat() if day else None,
+                "log_date": (parse_date(projected.get("log_date")).isoformat() if parse_date(projected.get("log_date")) else None),
+                "in_time": in_clock.strftime("%H:%M:%S") if in_clock else None,
+                "out_time": out_clock.strftime("%H:%M:%S") if out_clock else None,
+                "in_invalid": in_invalid,
+                "out_invalid": out_invalid,
+                "in_device_id": projected.get("in_device_id") or None,
+                "out_device_id": projected.get("out_device_id") or None,
+                "latitude": projected.get("latitude") or None,
+                "longitude": projected.get("longitude") or None,
+                "location": projected.get("location") or None,
+                "device_type": None,
+                "name": "",
+            }
+        )
+    return parsed, warnings
+
+
+def parse_candidate_punch_excel(path: object) -> tuple[list[dict], list[str]]:
+    """Parse a portal 'Download Excel' file from the Candidate ID report."""
+    import pandas as pd
+
+    frame = pd.read_excel(path, dtype=str)
+    frame = frame.fillna("")
+    headers = [str(column) for column in frame.columns]
+    rows = frame.astype(str).values.tolist()
+    return parse_candidate_punch_table(headers, rows)

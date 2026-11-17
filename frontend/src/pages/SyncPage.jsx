@@ -72,7 +72,7 @@ export default function SyncPage() {
       <div>
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          Resync one date, any date range, or all dates for the batch on screen. Sync opens the official Kaushal login. Sign in there yourself. Official attendance is never edited.
+          Sync opens the official Kaushal login, then reads each Candidate ID punch history (faster than clicking Present/Half/Absent per date). Sign in yourself. Official attendance is never edited. Choose one date, a range, or all dates to save.
         </p>
       </div>
 

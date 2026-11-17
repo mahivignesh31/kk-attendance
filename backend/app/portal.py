@@ -2,7 +2,7 @@
 
 The administrator signs in manually. This module never types credentials, never
 solves CAPTCHA or MFA, and never creates or edits official attendance. The only
-form control it submits is the report filter Submit button.
+form control it submits is the report Submit button (batch filters or Candidate ID).
 """
 
 from __future__ import annotations
@@ -10,12 +10,27 @@ from __future__ import annotations
 import logging
 import os
 import re
+import tempfile
 import time
+from pathlib import Path
 from typing import Optional
 
 from .calculator import parse_date
-from .config import BROWSER_PROFILE, PORTAL_LOGIN_URL, PORTAL_REPORT_URL, SCREENSHOT_DIR
-from .portal_parse import detail_key, norm_header, parse_detail_table, parse_summary_table
+from .config import (
+    BROWSER_PROFILE,
+    PORTAL_CANDIDATE_DETAILS_URL,
+    PORTAL_LOGIN_URL,
+    PORTAL_REPORT_URL,
+    SCREENSHOT_DIR,
+)
+from .portal_parse import (
+    detail_key,
+    norm_header,
+    parse_candidate_punch_excel,
+    parse_candidate_punch_table,
+    parse_detail_table,
+    parse_summary_table,
+)
 
 logger = logging.getLogger("attendance.portal")
 
@@ -156,7 +171,7 @@ class PortalClient:
                 locale="en-IN",
                 timezone_id="Asia/Kolkata",
                 viewport={"width": 1440, "height": 900},
-                accept_downloads=False,
+                accept_downloads=True,
                 args=["--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage"],
             )
         except Exception as exc:
@@ -229,51 +244,83 @@ class PortalClient:
                 logger.info("Could not remove the browser profile lock %s", name)
 
     def prepare_report(self, batch: dict, sync_id: int) -> list[str]:
+        """Open the Candidate ID attendance report (fast punch-history sync)."""
         self.batch = batch
         self.sync_id = sync_id
         self.open_browser()
         self.manager.update(sync_id, progress_step="connecting", message="Opening the Kaushal portal")
-        if self._summary_ready():
-            return self._verify_batch_banner()
-        if not self._on_attendance_report():
-            self._goto(PORTAL_REPORT_URL)
+        if not self._on_candidate_details():
+            self._goto(PORTAL_CANDIDATE_DETAILS_URL)
             self._wait_for_app()
         if self._login_form_visible() or not self._authenticated():
             if not self._login_form_visible():
                 self._goto(PORTAL_LOGIN_URL)
                 self._wait_for_app()
             self._wait_for_manual_login()
-            if not self._summary_ready() and not self._on_attendance_report():
-                self._goto(PORTAL_REPORT_URL)
+            if not self._on_candidate_details():
+                self._goto(PORTAL_CANDIDATE_DETAILS_URL)
                 self._wait_for_app()
-        if self._summary_ready():
-            return self._verify_batch_banner()
-        self.manager.update(sync_id, progress_step="loading_report", message="Selecting the batch")
-        if not self._filters_visible():
-            self._open_report_menu()
+        if not self._on_candidate_details():
+            self._open_candidate_details_menu()
             self._wait_for_app()
-        if self._summary_ready():
-            return self._verify_batch_banner()
-        try:
-            self._apply_filters()
-            if not self._summary_ready():
-                self._click_submit()
-            self._wait_for_table("summary", timeout=25)
-        except PortalError:
-            self.manager.update(
-                sync_id,
-                message="Click Submit on the Kaushal report. Reading starts when the date table is visible.",
+        if not self._candidate_id_form_visible():
+            self._goto(PORTAL_CANDIDATE_DETAILS_URL)
+            self._wait_for_app()
+        if not self._candidate_id_form_visible():
+            self._shot("candidate-form-missing")
+            raise PortalError(
+                "The Candidate ID attendance report form was not found. Open REPORT → CANDIDATE ATTENDANCE REPORT and leave the Candidate ID box on screen."
             )
-            self._wait_for_submitted_table()
-        if not self._summary_ready():
-            self._wait_for_submitted_table()
-        return self._verify_batch_banner()
+        self.manager.update(
+            sync_id,
+            progress_step="loading_report",
+            message="Candidate ID report ready — reading each candidate’s punch history",
+        )
+        return []
+
+    def fetch_candidate_punches(self, candidate_id: str) -> tuple[list[dict], list[str]]:
+        """Submit one Candidate ID and return every punch row for that person."""
+        self._guard_candidate_session()
+        cid = (candidate_id or "").strip()
+        if not cid:
+            return [], ["Skipped a candidate with a blank Candidate ID."]
+        self._fill_candidate_id(cid)
+        self._click_submit()
+        self._wait_until_settled()
+        # Prefer Excel when the portal offers it — one file has the full history.
+        excel_rows, excel_warnings = self._try_download_candidate_excel(cid)
+        if excel_rows is not None:
+            return excel_rows, excel_warnings
+        if not self._wait_for_candidate_table(timeout=30):
+            return [], [f"No punch rows returned for Candidate ID {cid}."]
+        return self._collect_candidate_punches()
+
+    def _wait_for_candidate_table(self, timeout: int) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._check_cancel()
+            if not self._loader_visible():
+                table = self._read_table("candidate_punches")
+                if table and table["rows"]:
+                    return True
+                # Empty result page (no punches) — stop waiting once the form is idle.
+                try:
+                    body = (self.page.inner_text("body") or "").lower()
+                except Exception:
+                    body = ""
+                if any(token in body for token in ("no record", "no data", "0 of 0", "showing 0")):
+                    return False
+            self.page.wait_for_timeout(120)
+        table = self._read_table("candidate_punches")
+        return bool(table and table["rows"])
 
     def discover_dates(self) -> tuple[list[dict], list[str]]:
+        """Legacy batch summary path (kept for reference / emergency fallback)."""
         self.manager.update(self.sync_id, progress_step="discovering_dates", message="Discovering Dates")
         return self._collect("summary")
 
     def extract_date(self, summary: dict) -> tuple[list[dict], set[str], set[str], list[str]]:
+        """Legacy per-date Present/Half/Absent drill-down (unused by the fast sync)."""
         self._guard_session()
         self._ensure_summary()
         details: list[dict] = []
@@ -298,6 +345,160 @@ class PortalClient:
             finally:
                 self._ensure_summary()
         return details, opened, failed, warnings
+
+    def _on_candidate_details(self) -> bool:
+        if self._candidate_id_form_visible():
+            return True
+        try:
+            href = (self.page.evaluate("() => location.href") or "").lower()
+        except Exception:
+            href = ""
+        if "candidate-attendance-details" in href:
+            return True
+        try:
+            text = (self.page.inner_text("body") or "")[:8000].lower()
+        except Exception:
+            return False
+        return "enter candidate id" in text or ("candidate id" in text and "attendance id" in text and "or" in text)
+
+    def _candidate_id_form_visible(self) -> bool:
+        try:
+            if self.page.get_by_placeholder(re.compile(r"candidate\s*id", re.I)).count():
+                return True
+            if self.page.get_by_label(re.compile(r"candidate\s*id", re.I)).count():
+                return True
+        except Exception:
+            pass
+        try:
+            text = norm_header(self.page.inner_text("body")[:4000])
+        except Exception:
+            return False
+        return "candidate id" in text and "attendance id" in text
+
+    def _open_candidate_details_menu(self) -> None:
+        for pattern in (r"DDUGKY\s*REPORT", r"DDU-?\s*GKY\s*REPORT", r"^\s*REPORT\s*$"):
+            if self._click_text(pattern):
+                self.page.wait_for_timeout(500)
+                break
+        self._click_text(r"CANDIDATE\s+ATTENDANCE\s+REPORT")
+        self._wait_for_app()
+
+    def _fill_candidate_id(self, candidate_id: str) -> None:
+        field = None
+        for locator in (
+            self.page.get_by_placeholder(re.compile(r"candidate\s*id", re.I)),
+            self.page.get_by_label(re.compile(r"^\s*candidate\s*id\s*$", re.I)),
+            self.page.locator("input").filter(has=self.page.locator("xpath=..")).first,
+        ):
+            try:
+                if locator.count() == 0:
+                    continue
+                candidate = locator.first
+                if candidate.is_visible():
+                    field = candidate
+                    break
+            except Exception:
+                continue
+        if field is None:
+            # Label → following input
+            label = self.page.get_by_text(re.compile(r"^\s*Candidate\s+ID\s*$", re.I))
+            if label.count():
+                nearby = label.first.locator(
+                    "xpath=following::input[not(@type='hidden')][1] | ../following::input[not(@type='hidden')][1]"
+                )
+                if nearby.count():
+                    field = nearby.first
+        if field is None:
+            inputs = self.page.locator("input[type='text'], input:not([type])")
+            if inputs.count() == 0:
+                raise PortalError("The Candidate ID input was not found.")
+            field = inputs.first
+        field.click()
+        field.fill("")
+        field.fill(candidate_id)
+        # Clear Attendance ID so the OR form uses Candidate ID only.
+        try:
+            aid = self.page.get_by_placeholder(re.compile(r"attendance\s*id", re.I))
+            if aid.count():
+                aid.first.fill("")
+        except Exception:
+            pass
+
+    def _try_download_candidate_excel(self, candidate_id: str) -> tuple[Optional[list[dict]], list[str]]:
+        button = self.page.get_by_role("button", name=re.compile(r"download\s*excel", re.I))
+        if button.count() == 0:
+            button = self.page.locator("button, a").filter(has_text=re.compile(r"download\s*excel", re.I))
+        if button.count() == 0:
+            return None, []
+        try:
+            with self.page.expect_download(timeout=12000) as download_info:
+                button.first.click()
+            download = download_info.value
+            suffix = Path(download.suggested_filename or "punches.xlsx").suffix or ".xlsx"
+            handle, temp_path = tempfile.mkstemp(prefix=f"kk-{candidate_id}-", suffix=suffix)
+            os.close(handle)
+            download.save_as(temp_path)
+            try:
+                rows, warnings = parse_candidate_punch_excel(temp_path)
+            finally:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            if not rows:
+                return None, warnings
+            for row in rows:
+                if not row.get("candidate_id"):
+                    row["candidate_id"] = candidate_id
+            return rows, warnings
+        except Exception as exc:
+            logger.info("Excel download skipped for %s: %s", candidate_id, exc)
+            return None, []
+
+    def _collect_candidate_punches(self) -> tuple[list[dict], list[str]]:
+        found: dict = {}
+        warnings: list[str] = []
+        seen_signatures: set[str] = set()
+        scrolls_without_growth = 0
+        for _ in range(120):
+            self._check_cancel()
+            self._wait_until_settled()
+            table = self._read_table("candidate_punches")
+            if table is None:
+                break
+            signature = f"{table['headers']}|{len(table['rows'])}|{table['rows'][:1]}|{table['rows'][-1:]}"
+            parsed, parse_warnings = parse_candidate_punch_table(table["headers"], table["rows"])
+            warnings.extend(parse_warnings)
+            before = len(found)
+            for item in parsed:
+                found[detail_key(item)] = item
+            grew = len(found) > before
+            if self._scroll_more():
+                if grew:
+                    scrolls_without_growth = 0
+                else:
+                    scrolls_without_growth += 1
+                if scrolls_without_growth < 1:
+                    continue
+            scrolls_without_growth = 0
+            if signature in seen_signatures:
+                break
+            seen_signatures.add(signature)
+            if not self._click_next():
+                break
+            self.page.wait_for_timeout(60)
+        return list(found.values()), warnings
+
+    def _guard_candidate_session(self) -> None:
+        if self._authenticated() and self._candidate_id_form_visible():
+            return
+        if not self._authenticated():
+            self._wait_for_manual_login()
+        if not self._candidate_id_form_visible():
+            self._goto(PORTAL_CANDIDATE_DETAILS_URL)
+            self._wait_for_app()
+        if not self._candidate_id_form_visible():
+            raise PortalError("Lost the Candidate ID report page. Open it again and restart sync.")
 
     def _wait_for_manual_login(self) -> None:
         self.manager.update(
@@ -694,6 +895,11 @@ class PortalClient:
                 rows = table.get("rows") or []
                 if kind == "summary" and "date" in headers and "present" in headers:
                     score = 100 + len(rows)
+                elif kind == "candidate_punches" and (
+                    ("consume date" in headers or "log date" in headers or "in time" in headers)
+                    and ("candidate id" in headers or "attendance id" in headers)
+                ):
+                    score = 120 + len(rows)
                 elif kind == "detail" and ("candidate id" in headers or "in time" in headers):
                     score = 80 + len(rows)
                 else:
