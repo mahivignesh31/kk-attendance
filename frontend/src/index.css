@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  background: #f6f4fb;
+  color: #1e1630;
+}
+
+.matrix-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 230px);
+}
+
+.matrix-scroll th,
+.matrix-scroll td {
+  white-space: nowrap;
+}
+
+.matrix-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.matrix-scroll .sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #fff;
+}
+
+.matrix-scroll thead .sticky-col {
+  z-index: 3;
+}

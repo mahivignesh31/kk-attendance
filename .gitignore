@@ -1,0 +1,13 @@
+backend/.venv/
+backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
+backend/data/browser-profile/
+backend/data/sync-screenshots/
+backend/data/sync.log
+backend/data/*.xlsx
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+.pytest_cache/
+.DS_Store
