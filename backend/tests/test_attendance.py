@@ -476,6 +476,19 @@ def test_recalculate_changes_local_status_only(tmp_path, monkeypatch):
     assert stored["qualifying_minutes"] == 360
 
 
+def test_excel_import_ignores_dates_before_batch_start():
+    from app.excel_sync import _drop_before_batch_start
+
+    punches = [
+        {"attendance_date": "2026-10-15", "candidate_id": "1"},
+        {"attendance_date": "2026-10-16", "candidate_id": "1"},
+        {"attendance_date": "2026-10-17", "candidate_id": "1"},
+    ]
+    kept, skipped = _drop_before_batch_start(punches, date(2026, 10, 16))
+    assert skipped == 1
+    assert [row["attendance_date"] for row in kept] == ["2026-10-16", "2026-10-17"]
+
+
 def test_candidate_id_punch_table_builds_present_and_absent():
     headers = [
         "Sr. No.",

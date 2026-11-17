@@ -88,6 +88,19 @@ def import_punch_excels(
         if not candidates:
             raise ValueError("Import the master candidate workbook before uploading attendance Excel.")
 
+        batch_start = parse_date(batch.get("batch_start_date"))
+        kept_punches, skipped_before = _drop_before_batch_start(all_punches, batch_start)
+        if skipped_before:
+            start_label = batch_start.isoformat() if batch_start else "batch start"
+            warnings.append(
+                f"Ignored {skipped_before} punch row(s) dated before batch start {start_label}."
+            )
+        if not kept_punches:
+            raise ValueError(
+                "Every punch row was before the batch start date, so nothing was imported. "
+                f"Batch start is {batch_start.isoformat() if batch_start else 'not set'}."
+            )
+
         cursor = conn.execute(
             """
             INSERT INTO sync_history (
@@ -98,7 +111,7 @@ def import_punch_excels(
         )
         sync_id = int(cursor.lastrowid)
 
-        by_date = group_punches_by_date(all_punches)
+        by_date = group_punches_by_date(kept_punches)
         discovered = sorted(by_date.keys())
         existing = {
             row["attendance_date"]: dict(row)
@@ -111,6 +124,17 @@ def import_punch_excels(
             date_to=date_to,
             existing=existing,
         )
+        # Never import calendar days before the configured batch start.
+        if batch_start is not None:
+            start_iso = batch_start.isoformat()
+            before_selected = [day for day in selected if day < start_iso]
+            selected = [day for day in selected if day >= start_iso]
+            if before_selected:
+                warnings.append(
+                    f"Skipped date(s) before batch start {start_iso}: "
+                    + ", ".join(before_selected[:20])
+                    + ("…" if len(before_selected) > 20 else "")
+                )
         conn.execute(
             "UPDATE sync_history SET dates_discovered = ?, progress_total = ? WHERE id = ?",
             (len(discovered), len(selected), sync_id),
@@ -142,7 +166,10 @@ def import_punch_excels(
             processed += 1
 
         recalculate_all(conn, rules)
-        message = f"Imported {processed} date(s), {saved} record(s) from {len(paths)} Excel file(s)."
+        message = (
+            f"Imported {processed} date(s), {saved} record(s) from {len(paths)} Excel file(s)."
+            + (f" Ignored {skipped_before} row(s) before batch start." if skipped_before else "")
+        )
         if warnings:
             log = "\n".join(warnings[-40:])
             conn.execute(
@@ -169,6 +196,25 @@ def import_punch_excels(
         "dates_processed": processed,
         "records_saved": saved,
         "files": len(paths),
+        "skipped_before_batch_start": skipped_before,
+        "batch_start_date": batch_start.isoformat() if batch_start else None,
         "warnings": warnings[:30],
         "message": message,
     }
+
+
+def _drop_before_batch_start(punches: list[dict], batch_start) -> tuple[list[dict], int]:
+    """Keep only punches on/after batch start. Rows with no readable date are kept for later warnings."""
+    if batch_start is None:
+        return punches, 0
+    kept: list[dict] = []
+    skipped = 0
+    start_iso = batch_start.isoformat()
+    for row in punches:
+        day = row.get("attendance_date") or row.get("consume_date")
+        parsed = parse_date(day) if day else None
+        if parsed is not None and parsed.isoformat() < start_iso:
+            skipped += 1
+            continue
+        kept.append(row)
+    return kept, skipped

@@ -129,9 +129,12 @@ export default function SyncPage() {
         <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
           <li>Open Kaushal in your normal browser and sign in</li>
           <li>Go to Candidate Attendance Report → enter Candidate ID → Submit</li>
-          <li>Click <span className="font-medium">Download Excel</span> (repeat for other candidates if needed)</li>
-          <li>Upload the Excel file(s) below</li>
+          <li>Click <span className="font-medium">Download Excel</span> for each candidate</li>
+          <li>Select <span className="font-medium">all Excel files at once</span> below and import</li>
         </ol>
+        <p className="mt-3 text-sm text-slate-500">
+          Dates before this batch’s start date are ignored automatically.
+        </p>
 
         <div className="mt-5 flex flex-wrap gap-4 text-sm">
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> All dates in file</label>
