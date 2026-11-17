@@ -78,7 +78,7 @@ export default function CellDialog({ candidatePk, date, onClose }) {
             </div>
           )}
           <p className="text-xs leading-5 text-slate-500">
-            DDU-GKY 2.0 one-shift rule for a day longer than 4 hours. Fifteen minutes late or early is condoned. Up to 1 hour is a full day, and only 2 such days count in any 15 calendar days. More than 1 hour is a half day. More than 4 hours late or early is absent. An out time of 00:00:00 means there was no check-out, so that one punch is a full day. A check-out at the same minute as the check-in is a real exit and is judged by the table. Lunch is not subtracted.
+            SOP day rule: 0–15 min late/early = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent. One punch or out 00:00:00 = Full day. No punch = Absent. Grace: 2 in any 15 days, then Half day. Lunch is not subtracted.
           </p>
         </div>
       )}

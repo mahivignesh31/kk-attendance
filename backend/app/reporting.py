@@ -694,14 +694,24 @@ def recalculate_all(conn: sqlite3.Connection, rules: dict | None = None) -> int:
             schedule_start=clocks["training_start"],
             schedule_end=clocks["training_end"],
         )
+        from .candidate_sync import STATUS_TO_CATEGORY
+
+        official = STATUS_TO_CATEGORY.get(result.calculated_status, "absent")
         conn.execute(
             """
             UPDATE attendance_records
-            SET calculated_status = ?, elapsed_minutes = ?, lunch_deduction_minutes = ?, qualifying_minutes = ?
+            SET calculated_status = ?,
+                official_status = ?,
+                official_categories = ?,
+                elapsed_minutes = ?,
+                lunch_deduction_minutes = ?,
+                qualifying_minutes = ?
             WHERE id = ?
             """,
             (
                 result.calculated_status,
+                official,
+                json.dumps([official]),
                 result.elapsed_minutes,
                 result.lunch_deduction_minutes,
                 result.qualifying_minutes,
@@ -721,7 +731,16 @@ def recalculate_all(conn: sqlite3.Connection, rules: dict | None = None) -> int:
         )
         for day, _status, _grace, record_id in rows:
             if day in demoted:
-                conn.execute("UPDATE attendance_records SET calculated_status = 'half_day' WHERE id = ?", (record_id,))
+                conn.execute(
+                    """
+                    UPDATE attendance_records
+                    SET calculated_status = 'half_day',
+                        official_status = 'half_day',
+                        official_categories = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(["half_day"]), record_id),
+                )
     return updated
 
 

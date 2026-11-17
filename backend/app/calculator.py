@@ -263,13 +263,14 @@ def calculate_hours(
     schedule_start: Optional[time] = None,
     schedule_end: Optional[time] = None,
 ) -> HourResult:
-    """DDU-GKY 2.0 one-shift status, measured from the training start and end.
+    """One-shift SOP status from training start/end (lunch not subtracted).
 
-    Lunch is not subtracted. Up to 15 minutes late or early is a full day and is
-    condoned. More than 15 minutes and up to 1 hour is a full day and uses one
-    grace occasion. More than 1 hour and up to 4 hours is a half day. More than
-    4 hours is absent. One punch, including an out time of 00:00:00, is a full day.
-    The missing check-out is not invented.
+    0–15 min late/early → full day (condoned, no grace)
+    16–60 min → full day + 1 grace
+    61–240 min → half day
+    > 4 hours → absent
+    Only one punch / out 00:00:00 → full day
+    No punch on a working day → absent (handled by callers)
     """
     del lunch_start, lunch_end, full_day_hours, half_day_hours, clip_start, clip_end
     invalid = False

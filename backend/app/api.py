@@ -460,6 +460,28 @@ def reset_attendance_and_centre_passwords():
     return {"ok": True, "attendance": wiped, "centre_logins": accounts}
 
 
+@router.post("/admin/recalculate-attendance")
+def recalculate_attendance():
+    """Admin-only: re-apply SOP day rules to every stored punch."""
+    _require_admin()
+    from .reporting import recalculate_all
+
+    with transaction() as conn:
+        updated = recalculate_all(conn)
+    return {
+        "ok": True,
+        "records_updated": updated,
+        "rules": [
+            "0–15 min late/early → Full day (condoned)",
+            "16–60 min → Full day + 1 grace",
+            "61–240 min → Half day",
+            "> 4 hours → Absent",
+            "One punch / out 00:00:00 → Full day",
+            "No punch on a working day → Absent",
+        ],
+    }
+
+
 @router.post("/centres/{centre_id}/batches")
 def create_centre_batch(centre_id: int, body: BatchBody):
     from .calculator import parse_date

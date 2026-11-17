@@ -471,7 +471,8 @@ def test_recalculate_changes_local_status_only(tmp_path, monkeypatch):
         stored = conn.execute(
             "SELECT calculated_status, official_status, qualifying_minutes FROM attendance_records"
         ).fetchone()
-    assert stored["official_status"] == "present"
+    # 09:00–15:00 vs 09:00–18:00 is 3 hours early → half day; official follows SOP too.
+    assert stored["official_status"] == "half_day"
     assert stored["calculated_status"] == "half_day"
     assert stored["qualifying_minutes"] == 360
 

@@ -64,8 +64,14 @@ export default function Settings() {
           </div>
         </section>
         <section className="rounded-2xl bg-white p-5 shadow-card">
-          <h2 className="font-semibold">DDU-GKY 2.0 day status</h2>
-          <p className="mt-1 text-sm leading-6 text-slate-500">The percentage is classroom attendance only. RF and OJT are not included. This batch runs {form.rules.scheduled_hours} hours, so the DDU-GKY 2.0 one-shift table applies. Fifteen minutes late at the start and fifteen minutes early at the end are condoned. Up to 1 hour late or early is a full day, for 2 occasions in any 15 calendar days. More than 1 hour, or a further occasion, is a half day. More than 4 hours late or early is absent. A shift of 4 hours or less uses the double-shift table: up to 30 minutes is a full day for 4 occasions in 15 days, more than 30 minutes is a half day, and more than 2 hours is absent. Lunch is not subtracted. One punch with no exit is a full day. Classroom % = (full days + half days × 0.5) / total working days × 100. Below 75% is the SOP minimum.</p>
+          <h2 className="font-semibold">Attendance day status (SOP)</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            Classroom only (RF / OJT not counted). Schedule {form.rules.training_start}–{form.rules.training_end} ({form.rules.scheduled_hours} hrs). Lunch is not subtracted.
+            Late or early leave: 0–15 min = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent.
+            Only one punch (or out 00:00:00) = Full day. No punch on a working day = Absent.
+            Grace: 2 occasions in any 15 calendar days; a further occasion becomes Half day.
+            Classroom % = (full days + half days × 0.5) / working days × 100. Alert below {form.rules.low_attendance_threshold}%.
+          </p>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <Field label="Training start" type="time" value={form.rules.training_start} onChange={(value) => update("rules", "training_start", value)} />
             <Field label="Training end" type="time" value={form.rules.training_end} onChange={(value) => update("rules", "training_end", value)} />
