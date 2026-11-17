@@ -52,7 +52,14 @@ async def require_admin(request: Request, call_next):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"(http://(localhost|127\.0\.0\.1):\d+|https://.*\.vercel\.app)",
+    allow_origin_regex=(
+        r"(http://(localhost|127\.0\.0\.1):\d+"
+        r"|https://.*\.vercel\.app"
+        r"|https://.*\.up\.railway\.app"
+        r"|https://.*\.railway\.app"
+        r"|https://.*\.onrender\.com"
+        r"|https://.*\.fly\.dev)"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

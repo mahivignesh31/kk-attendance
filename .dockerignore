@@ -1,0 +1,14 @@
+**/node_modules
+**/__pycache__
+**/.venv
+**/.pytest_cache
+**/dist
+**/.vercel
+backend/data/*.db
+backend/data/*.db-*
+backend/data/browser-profile
+backend/data/sync-screenshots
+backend/data/sync.log
+backend/data/*.xlsx
+.git
+.DS_Store

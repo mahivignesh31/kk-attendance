@@ -8,6 +8,7 @@ form control it submits is the report filter Submit button.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from typing import Optional
@@ -148,14 +149,15 @@ class PortalClient:
         self._release_profile_lock()
         self.playwright = sync_playwright().start()
         try:
+            headless = os.environ.get("ATTENDANCE_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
             self.context = self.playwright.chromium.launch_persistent_context(
                 user_data_dir=str(BROWSER_PROFILE),
-                headless=False,
+                headless=headless,
                 locale="en-IN",
                 timezone_id="Asia/Kolkata",
                 viewport={"width": 1440, "height": 900},
                 accept_downloads=False,
-                args=["--no-first-run", "--no-default-browser-check"],
+                args=["--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage"],
             )
         except Exception as exc:
             self._discard_browser()
