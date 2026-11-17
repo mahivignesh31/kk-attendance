@@ -287,7 +287,10 @@ def dashboard(conn: sqlite3.Connection, selected: str | None = None) -> dict:
         row for row in stats if row["verified_percent"] is not None and row["verified_percent"] < threshold
     ]
     below.sort(key=lambda item: (item["verified_percent"], item["name"]))
+    from .auth import actor, public_account
+
     return {
+        "user": public_account(actor()),
         "batch": context["batch"],
         "rules": {**context["rules"], "scheduled_hours": round(scheduled_qualifying_minutes(context["rules"]) / 60, 2)},
         "selected_date": selected_iso,

@@ -408,17 +408,14 @@ def centre_detail(centre_id: int):
 @router.post("/centres/{centre_id}/login")
 def create_centre_login(centre_id: int):
     _require_admin()
-    import re
+    from .auth import centre_login_slug, centre_password_for
 
     with transaction() as conn:
         centre = conn.execute("SELECT * FROM training_centres WHERE id = ?", (centre_id,)).fetchone()
         if centre is None:
             raise HTTPException(status_code=404, detail="Training centre was not found.")
-        code_slug = re.sub(r"[^a-z0-9]+", "", (centre["code"] or "").lower())
-        name_slug = re.sub(r"[^a-z0-9]+", "", (centre["name"] or "").lower())
-        base = code_slug if len(code_slug) >= 4 else name_slug
-        base = base or f"centre{centre_id}"
-        username = base
+        username = centre_login_slug(centre["name"], centre_id)
+        password = centre_password_for(centre["name"], centre_id)
         owner = conn.execute(
             "SELECT id FROM administrators WHERE centre_id = ? AND role = 'centre'",
             (centre_id,),
@@ -428,9 +425,8 @@ def create_centre_login(centre_id: int):
             (username,),
         ).fetchone()
         if clash and (owner is None or clash["id"] != owner["id"]):
-            username = f"{base}{centre_id}"
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        password = "Centre-" + "".join(secrets.choice(alphabet) for _ in range(6))
+            username = f"{username}{centre_id}"
+            password = centre_password_for(username)
         hashed = hash_password(password)
         if owner:
             conn.execute(
@@ -445,7 +441,23 @@ def create_centre_login(centre_id: int):
                 """,
                 (username, hashed, centre_id, now_iso()),
             )
+        conn.execute(
+            "DELETE FROM admin_sessions WHERE admin_id IN (SELECT id FROM administrators WHERE centre_id = ? AND role = 'centre')",
+            (centre_id,),
+        )
     return {"username": username, "password": password, "centre_name": centre["name"]}
+
+
+@router.post("/admin/reset-attendance-and-centre-passwords")
+def reset_attendance_and_centre_passwords():
+    """Admin-only: wipe attendance and set every centre password to {centrename}@123."""
+    _require_admin()
+    from .auth import clear_all_attendance, ensure_centre_accounts
+
+    with transaction() as conn:
+        wiped = clear_all_attendance(conn)
+        accounts = ensure_centre_accounts(conn, reset_passwords=True)
+    return {"ok": True, "attendance": wiped, "centre_logins": accounts}
 
 
 @router.post("/centres/{centre_id}/batches")

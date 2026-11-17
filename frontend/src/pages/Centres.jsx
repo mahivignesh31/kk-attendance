@@ -105,7 +105,9 @@ export default function Centres() {
             <p className="mt-3 text-sm">{centre.batch_count} batches · {centre.candidate_count} candidates</p>
             <div className="mt-4 flex gap-2">
               <Link className="rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white" to={`/centres/${centre.id}`}>View batches</Link>
-              <button type="button" className="rounded-xl border border-plum-100 px-3 py-2 text-sm font-semibold" onClick={() => { setEditing(centre.id); setForm({ ...EMPTY, ...centre }); setOpen(true); }}>Edit centre</button>
+              {role !== "centre" && (
+                <button type="button" className="rounded-xl border border-plum-100 px-3 py-2 text-sm font-semibold" onClick={() => { setEditing(centre.id); setForm({ ...EMPTY, ...centre }); setOpen(true); }}>Edit centre</button>
+              )}
             </div>
           </article>
         ))}

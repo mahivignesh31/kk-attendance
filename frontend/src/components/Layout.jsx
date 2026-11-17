@@ -42,7 +42,10 @@ export default function Layout({ onSignedOut }) {
 
   const running = ["running", "awaiting_login", "cancelling"].includes(boot?.sync?.status);
   const centreLogin = boot?.user?.role === "centre";
-  const links = centreLogin ? LINKS.filter(([to]) => to !== "/settings") : LINKS;
+  // Centre logins only manage their own centre — hide Settings and the all-centres list.
+  const links = centreLogin
+    ? LINKS.filter(([to]) => to !== "/settings" && to !== "/centres")
+    : LINKS;
 
   return (
     <div className="min-h-screen bg-plum-50 text-ink">

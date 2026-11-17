@@ -51,8 +51,8 @@ export default function Dashboard() {
       </div>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <Card label="Training centres" value={cards.training_centres ?? 0} hint="Created by the administrator" />
-        <Card label="Active batches" value={cards.active_batches ?? 0} hint="Across every centre" />
+        <Card label="Training centres" value={cards.training_centres ?? 0} hint={data?.user?.role === "centre" ? "Your centre only" : "Created by the administrator"} />
+        <Card label="Active batches" value={cards.active_batches ?? 0} hint={data?.user?.role === "centre" ? "Batches at your centre" : "Across every centre"} />
         <Card label="Total candidates" value={cards.total_candidates} hint="Batch on screen" />
         <Card label="Today's classroom attendance" value={percent(cards.average_verified_percent)} hint="Classroom only. RF and OJT are not included." />
         <Card label="Below 75%" value={cards.below_threshold ?? 0} hint="Candidates on the batch on screen" />

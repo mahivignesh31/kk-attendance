@@ -88,7 +88,7 @@ export default function CentreDetail() {
       {payload.role !== "centre" && (
         <section className="rounded-2xl bg-white p-5 shadow-card">
           <h2 className="font-semibold">Centre login</h2>
-          <p className="mt-1 text-sm text-slate-500">Create a username and password for this training centre. That login shows only this centre's batches and candidates.</p>
+          <p className="mt-1 text-sm text-slate-500">Create a username and password for this training centre. Password is always {"{centrename}@123"}. That login shows only this centre — not the others.</p>
           {payload.login_username && !account && <p className="mt-2 text-sm">Current username: <span className="font-semibold">{payload.login_username}</span>. Creating again replaces the password.</p>}
           <button type="button" className="mt-3 rounded-xl bg-plum-700 px-4 py-2 text-sm font-semibold text-white" onClick={async () => {
             setError("");

@@ -109,6 +109,20 @@ def session_admin(token: str | None) -> str | None:
     return user["username"] if user else None
 
 
+def centre_login_slug(name: str, centre_id: int | None = None) -> str:
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+    if slug:
+        return slug
+    return f"centre{centre_id or ''}"
+
+
+def centre_password_for(name: str, centre_id: int | None = None) -> str:
+    """Password pattern: {centrename}@123 (lowercase letters/digits only)."""
+    return f"{centre_login_slug(name, centre_id)}@123"
+
+
 def ensure_admin(conn) -> None:
     conn.execute(
         """
@@ -143,6 +157,88 @@ def ensure_admin(conn) -> None:
             "INSERT INTO administrators (username, password_hash, created_at) VALUES (?, ?, ?)",
             (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD), now_iso()),
         )
+
+
+def ensure_centre_accounts(conn, *, reset_passwords: bool = False) -> list[dict]:
+    """Ensure every training centre has a login that can only see that centre.
+
+    Username/password use the centre name: kkerdsongole / kkerdsongole@123
+    """
+    centres = conn.execute("SELECT id, name FROM training_centres ORDER BY id").fetchall()
+    accounts: list[dict] = []
+    for centre in centres:
+        centre_id = int(centre["id"])
+        username = centre_login_slug(centre["name"], centre_id)
+        password = centre_password_for(centre["name"], centre_id)
+        owner = conn.execute(
+            "SELECT id, username FROM administrators WHERE centre_id = ? AND role = 'centre'",
+            (centre_id,),
+        ).fetchone()
+        clash = conn.execute(
+            "SELECT id, centre_id FROM administrators WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+        if clash and (owner is None or clash["id"] != owner["id"]):
+            username = f"{username}{centre_id}"
+            password = centre_password_for(username)
+        if owner and not reset_passwords:
+            accounts.append(
+                {
+                    "centre_id": centre_id,
+                    "centre_name": centre["name"],
+                    "username": owner["username"],
+                    "password": None,
+                }
+            )
+            continue
+        hashed = hash_password(password)
+        if owner:
+            conn.execute(
+                "UPDATE administrators SET username = ?, password_hash = ? WHERE id = ?",
+                (username, hashed, owner["id"]),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO administrators (username, password_hash, role, centre_id, created_at)
+                VALUES (?, ?, 'centre', ?, ?)
+                """,
+                (username, hashed, centre_id, now_iso()),
+            )
+        accounts.append(
+            {
+                "centre_id": centre_id,
+                "centre_name": centre["name"],
+                "username": username,
+                "password": password,
+            }
+        )
+    if reset_passwords:
+        conn.execute(
+            """
+            DELETE FROM admin_sessions
+            WHERE admin_id IN (SELECT id FROM administrators WHERE role = 'centre')
+            """
+        )
+    return accounts
+
+
+def clear_all_attendance(conn) -> dict:
+    """Wipe local attendance punches/dates. Candidates and batches stay."""
+    sessions = conn.execute("SELECT COUNT(*) AS n FROM attendance_sessions").fetchone()["n"]
+    records = conn.execute("SELECT COUNT(*) AS n FROM attendance_records").fetchone()["n"]
+    dates = conn.execute("SELECT COUNT(*) AS n FROM attendance_dates").fetchone()["n"]
+    issues = conn.execute("SELECT COUNT(*) AS n FROM reconciliation_issues").fetchone()["n"]
+    conn.execute("DELETE FROM attendance_sessions")
+    conn.execute("DELETE FROM attendance_records")
+    conn.execute("DELETE FROM attendance_dates")
+    conn.execute("DELETE FROM reconciliation_issues")
+    return {
+        "sessions_deleted": sessions,
+        "records_deleted": records,
+        "dates_deleted": dates,
+        "issues_deleted": issues,
+    }
 
 
 @router.post("/login")

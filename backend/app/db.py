@@ -157,10 +157,19 @@ def init_db() -> None:
     with transaction() as conn:
         conn.executescript(SCHEMA)
         migrate_centres(conn)
-        from .auth import ensure_admin
+        from .auth import clear_all_attendance, ensure_admin, ensure_centre_accounts
 
         ensure_admin(conn)
         ensure_defaults(conn)
+        # One-time: clear punches and set centre passwords to {centrename}@123.
+        flag = get_json(conn, "centre_password_reset_v2")
+        if not flag:
+            clear_all_attendance(conn)
+            ensure_centre_accounts(conn, reset_passwords=True)
+            set_json(conn, "centre_password_reset_v2", {"done_at": now_iso()})
+        else:
+            # Create logins for any new centres without resetting existing passwords.
+            ensure_centre_accounts(conn, reset_passwords=False)
 
 
 def migrate_centres(conn: sqlite3.Connection) -> None:
