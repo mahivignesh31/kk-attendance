@@ -146,6 +146,8 @@ class PortalClient:
         self.page = None
         self.batch = {}
         self.sync_id = None
+        self._cdp_browser = None
+        self._remote_mode = False
 
     def alive(self) -> bool:
         try:
@@ -154,6 +156,11 @@ class PortalClient:
             return False
 
     def open_browser(self, force: bool = False) -> None:
+        from .config import remote_display_enabled
+
+        if remote_display_enabled():
+            self._open_remote_cdp(force=force)
+            return
         if self.alive() and not force:
             return
         try:
@@ -166,8 +173,6 @@ class PortalClient:
         self._release_profile_lock()
         self.playwright = sync_playwright().start()
         try:
-            # Online (Railway): headed Chromium on Xvfb so the admin can log in via noVNC.
-            # Local: headed unless ATTENDANCE_HEADLESS=1.
             headless = os.environ.get("ATTENDANCE_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
             launch_args = [
                 "--no-first-run",
@@ -193,6 +198,7 @@ class PortalClient:
             raise PortalError(
                 "Could not open the portal browser. Close any leftover Chromium window from the last sync, then try again."
             ) from exc
+        self._remote_mode = False
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         self.main_page = self.page
         self._detail_popup = None
@@ -203,24 +209,79 @@ class PortalClient:
         except Exception:
             logger.info("Could not bring the portal window to the front")
 
-    def _discard_browser(self) -> None:
+    def _open_remote_cdp(self, force: bool = False) -> None:
+        """Attach to the always-on live Chromium after the admin has logged in."""
+        from .live_browser import cdp_endpoint, cdp_ready, ensure_started
+
+        ensure_started(PORTAL_LOGIN_URL)
+        if self.alive() and not force:
+            return
+        if not cdp_ready(timeout=2.0):
+            ensure_started(PORTAL_LOGIN_URL)
+        self._disconnect_playwright()
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise PortalError("Playwright is not installed.") from exc
+        try:
+            self.playwright = sync_playwright().start()
+            self._cdp_browser = self.playwright.chromium.connect_over_cdp(cdp_endpoint())
+            contexts = self._cdp_browser.contexts
+            self.context = contexts[0] if contexts else self._cdp_browser.new_context(
+                locale="en-IN",
+                timezone_id="Asia/Kolkata",
+                accept_downloads=True,
+            )
+            pages = self.context.pages
+            self.page = pages[0] if pages else self.context.new_page()
+            self.main_page = self.page
+            self._detail_popup = None
+            self._remote_mode = True
+            self.page.set_default_timeout(20000)
+            self.page.set_default_navigation_timeout(60000)
+        except Exception as exc:
+            self._disconnect_playwright()
+            raise PortalError(
+                "Could not attach to the live Kaushal window. Refresh Sync Attendance and try again."
+            ) from exc
+
+    def _disconnect_playwright(self) -> None:
+        """Detach automation only — keep the live Chromium running for login."""
+        was_remote = self._remote_mode
         context = self.context
         playwright = self.playwright
+        cdp_browser = self._cdp_browser
         self.context = None
         self.page = None
         self.main_page = None
         self.playwright = None
+        self._cdp_browser = None
         self._detail_popup = None
-        if context is not None:
+        self._remote_mode = False
+        if not was_remote and context is not None:
             try:
                 context.close()
             except Exception:
                 logger.info("Previous browser context was already closed")
+        if cdp_browser is not None:
+            try:
+                cdp_browser.close()
+            except Exception:
+                logger.info("CDP browser detach finished")
         if playwright is not None:
             try:
                 playwright.stop()
             except Exception:
                 logger.info("Previous Playwright driver was already stopped")
+
+    def _discard_browser(self) -> None:
+        from .config import remote_display_enabled
+
+        if remote_display_enabled() or self._remote_mode:
+            # Never kill the live Chromium used for online login.
+            self._disconnect_playwright()
+            return
+        self._disconnect_playwright()
 
     def _release_profile_lock(self) -> None:
         import os
@@ -260,30 +321,44 @@ class PortalClient:
 
     def prepare_report(self, batch: dict, sync_id: int) -> list[str]:
         """Open the Candidate ID attendance report (fast punch-history sync)."""
+        from .config import remote_display_enabled
+        from .live_browser import ensure_started
+
         self.batch = batch
         self.sync_id = sync_id
-        self.open_browser()
-        remote = os.environ.get("ATTENDANCE_REMOTE_DISPLAY", "").strip().lower() in {"1", "true", "yes"}
-        self.manager.update(
-            sync_id,
-            progress_step="connecting",
-            message=(
-                "Opening the Kaushal portal in the live window below — sign in there"
-                if remote
-                else "Opening the Kaushal portal"
-            ),
-        )
-        if not self._on_candidate_details():
-            self._goto(PORTAL_CANDIDATE_DETAILS_URL)
-            self._wait_for_app()
-        if self._login_form_visible() or not self._authenticated():
-            if not self._login_form_visible():
-                self._goto(PORTAL_LOGIN_URL)
-                self._wait_for_app()
-            self._wait_for_manual_login()
+        remote = remote_display_enabled()
+        if remote:
+            # Start a normal Chromium first (no automation bar). Admin logs in via noVNC.
+            self.manager.update(
+                sync_id,
+                progress_step="connecting",
+                message="Starting the live Kaushal window — use it below to sign in",
+            )
+            ensure_started(PORTAL_LOGIN_URL)
+            self._wait_for_remote_login_click()
+            self.open_browser()
+            if self._login_form_visible() or not self._authenticated():
+                self.manager.update(
+                    sync_id,
+                    status="awaiting_login",
+                    progress_step="awaiting_login",
+                    message="Finish Kaushal login in the live window, then click “I have logged in” again.",
+                )
+                self._wait_for_manual_login()
+        else:
+            self.open_browser()
+            self.manager.update(sync_id, progress_step="connecting", message="Opening the Kaushal portal")
             if not self._on_candidate_details():
                 self._goto(PORTAL_CANDIDATE_DETAILS_URL)
                 self._wait_for_app()
+            if self._login_form_visible() or not self._authenticated():
+                if not self._login_form_visible():
+                    self._goto(PORTAL_LOGIN_URL)
+                    self._wait_for_app()
+                self._wait_for_manual_login()
+        if not self._on_candidate_details():
+            self._goto(PORTAL_CANDIDATE_DETAILS_URL)
+            self._wait_for_app()
         if not self._on_candidate_details():
             self._open_candidate_details_menu()
             self._wait_for_app()
@@ -301,6 +376,24 @@ class PortalClient:
             message="Candidate ID report ready — reading each candidate’s punch history",
         )
         return []
+
+    def _wait_for_remote_login_click(self) -> None:
+        """Wait for “I have logged in” while Chromium stays a normal (non-automated) window."""
+        self.manager.update(
+            self.sync_id,
+            status="awaiting_login",
+            progress_step="awaiting_login",
+            message="In the live window: open Kaushal, complete login + CAPTCHA, then click “I have logged in”.",
+        )
+        deadline = time.time() + 20 * 60
+        while time.time() < deadline:
+            self._check_cancel()
+            if self.manager.login_event.is_set():
+                self.manager.login_event.clear()
+                self.manager.update(self.sync_id, status="running", message="Connecting to your logged-in session")
+                return
+            time.sleep(0.4)
+        raise PortalError("Login was not completed within 20 minutes. No attendance was changed on the portal.")
 
     def fetch_candidate_punches(self, candidate_id: str) -> tuple[list[dict], list[str]]:
         """Submit one Candidate ID and return every punch row for that person."""

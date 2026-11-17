@@ -86,7 +86,7 @@ export default function SyncPage() {
         <h1 className="text-2xl font-semibold">Portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
           {remoteBrowser
-            ? "Online sync opens a live Kaushal window below. Log in there (CAPTCHA included), then click “I have logged in”. Reports stay on this site. Official attendance is never edited."
+            ? "Live only: use the Kaushal window below (normal Chrome, not a bot window). Sign in with CAPTCHA, click “I have logged in”, then sync runs online. Official attendance is never edited."
             : "Sync opens the official Kaushal login on this computer. Sign in yourself, then continue. Official attendance is never edited."}{" "}
           You can check one date, a date range, or all dates.
         </p>
@@ -142,8 +142,8 @@ export default function SyncPage() {
               <h2 className="font-semibold">Live Kaushal window</h2>
               <p className="mt-1 text-sm text-slate-500">
                 {showLiveBrowser
-                  ? "Use this window to complete the government login. After you are in, click “I have logged in” above."
-                  : "Start a sync to open the portal browser here. Login stays on the server for later syncs when possible."}
+                  ? "This is a real Chrome on the server. Log into Kaushal here, then click “I have logged in”."
+                  : "Live Chrome stays here for Kaushal. Start a sync, sign in in this window, then click “I have logged in”."}
               </p>
             </div>
             {browserSrc && (
