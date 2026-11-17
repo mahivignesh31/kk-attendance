@@ -341,7 +341,7 @@ class PortalClient:
             self.open_browser()
             if self._login_form_visible() or not self._authenticated():
                 self._disconnect_playwright()
-                ensure_login_browser(PORTAL_LOGIN_URL)
+                ensure_login_browser(PORTAL_LOGIN_URL, fresh=True)
                 self.manager.update(
                     sync_id,
                     status="awaiting_login",
