@@ -7,6 +7,8 @@ import secrets
 import threading
 from datetime import timedelta
 
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -25,6 +27,21 @@ _local = threading.local()
 class LoginBody(BaseModel):
     username: str
     password: str
+
+
+def cookie_settings(request: Request) -> dict:
+    """Use a cross-site cookie when the Vercel site talks to this API."""
+    origin = request.headers.get("origin") or ""
+    host = (request.headers.get("host") or "").split(":")[0]
+    origin_host = urlparse(origin).hostname or ""
+    cross_site = bool(origin_host and host and origin_host != host)
+    return {
+        "httponly": True,
+        "samesite": "none" if cross_site else "lax",
+        "secure": cross_site or request.url.scheme == "https",
+        "path": "/",
+        "max_age": SESSION_HOURS * 3600,
+    }
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -129,7 +146,7 @@ def ensure_admin(conn) -> None:
 
 
 @router.post("/login")
-def login(body: LoginBody):
+def login(body: LoginBody, request: Request):
     from .db import read_conn, transaction
 
     username = body.username.strip()
@@ -154,7 +171,7 @@ def login(body: LoginBody):
         if stored:
             account = public_account(stored)
     response = JSONResponse(account)
-    response.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=SESSION_HOURS * 3600, path="/")
+    response.set_cookie(COOKIE, token, **cookie_settings(request))
     return response
 
 
@@ -197,5 +214,11 @@ def logout(request: Request):
         with transaction() as conn:
             conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
     response = JSONResponse({"ok": True})
-    response.delete_cookie(COOKIE, path="/")
+    settings = cookie_settings(request)
+    response.delete_cookie(
+        COOKIE,
+        path=settings["path"],
+        samesite=settings["samesite"],
+        secure=settings["secure"],
+    )
     return response

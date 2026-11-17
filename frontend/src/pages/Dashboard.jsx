@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api } from "../api";
+import { api, apiUrl } from "../api";
 import { longDate, percent, stamp } from "../utils";
 
 export default function Dashboard() {
@@ -134,7 +134,7 @@ export default function Dashboard() {
             <h2 className="font-semibold">Candidates below {data.rules.low_attendance_threshold}%</h2>
             <p className="text-sm text-slate-500">A day with no attendance mark counts as absent and lowers this percentage.</p>
           </div>
-          <a className="text-sm font-semibold text-plum-700" href="/api/export/low-attendance">Download report</a>
+          <a className="text-sm font-semibold text-plum-700" href={apiUrl("/api/export/low-attendance")}>Download report</a>
         </div>
         {data.below_threshold.length === 0 ? (
           <p className="text-sm text-slate-500">No verified attendance is below the threshold yet.</p>
@@ -215,5 +215,5 @@ function Empty() {
 
 function Export({ href, label }) {
   if (!href) return null;
-  return <a className="rounded-xl border border-plum-100 bg-white px-3 py-2 text-sm font-medium text-plum-800 hover:bg-plum-50" href={href}>{label}</a>;
+  return <a className="rounded-xl border border-plum-100 bg-white px-3 py-2 text-sm font-medium text-plum-800 hover:bg-plum-50" href={apiUrl(href)}>{label}</a>;
 }
