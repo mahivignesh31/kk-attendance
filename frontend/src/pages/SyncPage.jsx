@@ -133,7 +133,8 @@ export default function SyncPage() {
           <li>Select <span className="font-medium">all Excel files at once</span> below and import</li>
         </ol>
         <p className="mt-3 text-sm text-slate-500">
-          Dates before this batch’s start date are ignored automatically.
+          Each Excel file’s Batch Reg No. is used automatically, so punches go to the right batch.
+          Dates before that batch’s start are ignored. Wrong Candidate IDs are skipped — existing marks are not wiped.
         </p>
 
         <div className="mt-5 flex flex-wrap gap-4 text-sm">

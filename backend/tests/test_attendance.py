@@ -490,6 +490,21 @@ def test_excel_import_ignores_dates_before_batch_start():
     assert [row["attendance_date"] for row in kept] == ["2026-10-16", "2026-10-17"]
 
 
+def test_excel_punches_group_by_batch_reg_no():
+    from app.excel_sync import _group_punches_by_batch
+
+    punches = [
+        {"batch_reg_no": "BT26D023667", "candidate_id": "1"},
+        {"batch_reg_no": "BT26D023737", "candidate_id": "2"},
+        {"batch_reg_no": "BT26D023667", "candidate_id": "3"},
+        {"batch_reg_no": "", "candidate_id": "4"},
+    ]
+    grouped = _group_punches_by_batch(punches, fallback_batch="BT26D023863")
+    assert set(grouped) == {"BT26D023667", "BT26D023737", "BT26D023863"}
+    assert len(grouped["BT26D023667"]) == 2
+    assert grouped["BT26D023863"][0]["candidate_id"] == "4"
+
+
 def test_parse_candidate_punch_excel_skips_title_row(tmp_path):
     from openpyxl import Workbook
 
