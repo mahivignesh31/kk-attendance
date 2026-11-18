@@ -47,7 +47,7 @@ export default function Settings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Administrator controls</h1>
-        <p className="mt-1 max-w-3xl text-sm text-slate-500">Ongole can hold as many batches as you create. Each batch is the master workbook for that batch. Candidates are matched by Candidate Id, then by exact name.</p>
+        <p className="mt-1 max-w-3xl text-sm text-slate-500">Ongole can hold as many batches as you create. Each batch is the master workbook for that batch. Candidates are matched by KP Id only, then by exact name. Attendance Id is not used.</p>
       </div>
       {message && <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}
       {error && <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
@@ -68,7 +68,7 @@ export default function Settings() {
           <p className="mt-1 text-sm leading-6 text-slate-500">
             Classroom only (RF / OJT not counted). Schedule {form.rules.training_start}–{form.rules.training_end} ({form.rules.scheduled_hours} hrs). Lunch is not subtracted.
             Late or early leave: 0–15 min = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent.
-            Only one punch (or out 00:00:00) = Full day. No punch on a working day = Absent.
+            One punch (or out 00:00:00) still uses late/early vs training times — not an automatic Present. No punch on a working day = Absent.
             Grace: 2 occasions in any 15 calendar days; a further occasion becomes Half day.
             Classroom % = (full days + half days × 0.5) / working days × 100. Alert below {form.rules.low_attendance_threshold}%.
           </p>
@@ -141,7 +141,7 @@ function BatchSection({ onMessage, onError }) {
     onMessage("");
     try {
       const result = await api("/api/batches", { method: "POST", body });
-      onMessage(`${result.batch_code} created with ${result.total_candidates} candidates. Matched later by Candidate Id and name.`);
+      onMessage(`${result.batch_code} created with ${result.total_candidates} candidates. Matched later by KP Id and name.`);
       setCode("");
       load();
     } catch (err) {

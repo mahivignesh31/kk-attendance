@@ -41,7 +41,17 @@ class SyncManager:
         self._browser_thread = threading.Thread(target=self._browser_loop, name="kaushal-browser", daemon=True)
         self._browser_thread.start()
 
-    def start(self, mode: str, date_from: str | None, date_to: str | None, batch_code: str | None = None) -> int:
+    def start(
+        self,
+        mode: str,
+        date_from: str | None,
+        date_to: str | None,
+        batch_code: str | None = None,
+        batch_codes: list[str] | None = None,
+    ) -> int:
+        codes = [code for code in (batch_codes or []) if code]
+        if not codes and batch_code:
+            codes = [batch_code]
         with self._lock:
             if self._busy:
                 raise RuntimeError("A sync is already running.")
@@ -59,7 +69,7 @@ class SyncManager:
                     (now_iso(), mode, date_from, date_to),
                 )
                 sync_id = int(cursor.lastrowid)
-            self._jobs.put((sync_id, mode, date_from, date_to, batch_code))
+            self._jobs.put((sync_id, mode, date_from, date_to, codes or None))
         except Exception:
             with self._lock:
                 self._busy = False
@@ -69,9 +79,9 @@ class SyncManager:
     def _browser_loop(self) -> None:
         """Playwright can only be used on the thread that started it. This thread never exits."""
         while True:
-            sync_id, mode, date_from, date_to, batch_code = self._jobs.get()
+            sync_id, mode, date_from, date_to, batch_codes = self._jobs.get()
             try:
-                self._run(sync_id, mode, date_from, date_to, batch_code)
+                self._run(sync_id, mode, date_from, date_to, batch_codes)
             except Exception:
                 logger.exception("Sync %s ended outside the normal handler", sync_id)
             finally:
@@ -106,197 +116,128 @@ class SyncManager:
             text = ((current["error_log"] or "") + "\n" + message).strip()
             conn.execute("UPDATE sync_history SET error_log = ? WHERE id = ?", (text[-30000:], sync_id))
 
-    def _run(self, sync_id: int, mode: str, date_from: str | None, date_to: str | None, batch_code: str | None = None) -> None:
+    def _run(
+        self,
+        sync_id: int,
+        mode: str,
+        date_from: str | None,
+        date_to: str | None,
+        batch_codes: list[str] | None = None,
+    ) -> None:
         saved = 0
         processed = 0
         try:
             with transaction() as conn:
                 from .db import get_json
 
-                batch = get_json(conn, "batch") or {}
-                if batch_code:
-                    batch["batch_code"] = batch_code
-                rules = dict(get_json(conn, "rules") or {})
-                stored = conn.execute(
-                    "SELECT * FROM batches WHERE batch_code = ?",
-                    (batch.get("batch_code"),),
-                ).fetchone()
-                if stored:
-                    for key in ("state", "pia", "sanction_order", "training_center", "batch_code", "batch_start_date", "expected_end_date", "training_start", "training_end", "lunch_start", "lunch_end"):
-                        if stored[key]:
-                            if key in {"training_start", "training_end", "lunch_start", "lunch_end"}:
-                                rules[key] = stored[key]
-                            else:
-                                batch[key] = stored[key]
-                batch_id = upsert_batch(conn, batch)
-                candidates = [
-                    dict(row)
-                    for row in conn.execute(
-                        """
-                        SELECT * FROM candidates
-                        WHERE batch_id = ? OR batch_registration_number = ?
-                        ORDER BY sr_no, id
-                        """,
-                        (batch_id, batch.get("batch_code")),
-                    )
-                ]
-            if not candidates:
-                raise PortalError("Import the master candidate workbook before syncing.")
-            warnings = self.portal.prepare_report(batch, sync_id)
+                active = get_json(conn, "batch") or {}
+                rules_base = dict(get_json(conn, "rules") or {})
+                if batch_codes:
+                    codes = list(batch_codes)
+                else:
+                    code = (active.get("batch_code") or "").strip()
+                    if not code:
+                        raise PortalError("Select a training centre (or batch) before syncing.")
+                    codes = [code]
+                batches: list[dict] = []
+                for code in codes:
+                    stored = conn.execute("SELECT * FROM batches WHERE batch_code = ?", (code,)).fetchone()
+                    if stored is None:
+                        raise PortalError(f"Batch {code} was not found.")
+                    batches.append(dict(stored))
+            if not batches:
+                raise PortalError("No batches to sync for this training centre.")
+
+            first = batches[0]
+            open_batch = {
+                "state": first.get("state"),
+                "pia": first.get("pia"),
+                "sanction_order": first.get("sanction_order"),
+                "training_center": first.get("training_center"),
+                "batch_code": first.get("batch_code"),
+                "batch_start_date": first.get("batch_start_date"),
+                "expected_end_date": first.get("expected_end_date"),
+            }
+            warnings = self.portal.prepare_report(open_batch, sync_id)
             for warning in warnings:
                 self.log(sync_id, warning)
 
-            # Fast path: one Candidate ID submit returns that person's full punch history.
-            all_punches: list[dict] = []
+            batch_failures = 0
             candidate_failures = 0
-            total_candidates = len(candidates)
-            self.update(
-                sync_id,
-                progress_step="extracting_records",
-                progress_current=0,
-                progress_total=total_candidates,
-                status="running",
-                message=f"Reading candidate 0 of {total_candidates}",
-            )
-            for index, candidate in enumerate(candidates, start=1):
+            date_failures = 0
+            dates_discovered = 0
+            for batch_index, stored in enumerate(batches, start=1):
                 if self.cancel_event.is_set():
                     raise SyncCancelled("Sync cancelled by the administrator.")
-                cid = clean_id(candidate.get("candidate_id"))
-                name = candidate.get("name") or cid or f"#{candidate.get('id')}"
+                code = stored["batch_code"]
                 self.update(
                     sync_id,
+                    status="running",
                     progress_step="extracting_records",
-                    progress_current=index,
-                    progress_total=total_candidates,
-                    message=f"Reading {name} ({index} of {total_candidates})",
+                    message=f"Syncing {code} ({batch_index} of {len(batches)})",
                 )
-                if not cid:
-                    self.log(sync_id, f"{name}: skipped — blank Candidate ID on the master list.")
-                    candidate_failures += 1
+                self.log(sync_id, f"Starting batch {code} ({batch_index}/{len(batches)})")
+                try:
+                    batch_saved, batch_processed, batch_discovered, cand_fail, day_fail = self._sync_one_batch(
+                        sync_id=sync_id,
+                        mode=mode,
+                        date_from=date_from,
+                        date_to=date_to,
+                        stored=stored,
+                        rules_base=rules_base,
+                        batch_label=f"{code} ({batch_index}/{len(batches)})",
+                    )
+                except SyncCancelled:
+                    raise
+                except Exception as exc:
+                    batch_failures += 1
+                    self.log(sync_id, f"{code}: {_friendly_sync_error(exc)}")
+                    logger.exception("Batch %s failed", code)
                     continue
-                try:
-                    rows, notes = self.portal.fetch_candidate_punches(cid)
-                    for note in notes:
-                        self.log(sync_id, note)
-                    for row in rows:
-                        if not row.get("candidate_id"):
-                            row["candidate_id"] = cid
-                        if not row.get("name"):
-                            row["name"] = candidate.get("name") or ""
-                    all_punches.extend(rows)
-                except SyncCancelled:
-                    raise
-                except Exception as exc:
-                    candidate_failures += 1
-                    self.log(sync_id, f"{name} ({cid}): {exc}")
-                    logger.exception("Candidate %s failed", cid)
-
-            by_date = group_punches_by_date(all_punches)
-            discovered_dates = sorted(by_date.keys())
-            self.update(sync_id, dates_discovered=len(discovered_dates), message="Grouping punch dates")
-            with transaction() as conn:
-                existing = {
-                    row["attendance_date"]: dict(row)
-                    for row in conn.execute("SELECT * FROM attendance_dates WHERE batch_id = ?", (batch_id,))
-                }
-            selected_dates = filter_dates(
-                discovered_dates,
-                mode=mode,
-                date_from=date_from,
-                date_to=date_to,
-                existing=existing,
-            )
-            if mode == "range" and date_from and date_to:
-                missing = _dates_not_on_portal(
-                    [{"date": day} for day in discovered_dates],
-                    date_from,
-                    date_to,
-                )
-                if missing:
-                    self.log(
-                        sync_id,
-                        "No punches were found for these dates, so they were not created: "
-                        + ", ".join(missing[:40])
-                        + ("…" if len(missing) > 40 else ""),
-                    )
-            total = len(selected_dates)
-            self.update(sync_id, progress_total=total, status="running", message="Calculating attendance")
-            if total == 0:
+                saved += batch_saved
+                processed += batch_processed
+                dates_discovered += batch_discovered
+                candidate_failures += cand_fail
+                date_failures += day_fail
                 self.update(
                     sync_id,
-                    status="completed" if candidate_failures < total_candidates else "failed",
-                    finished_at=now_iso(),
-                    progress_step="completed",
-                    message="Sync Completed",
-                    records_saved=0,
-                    dates_processed=0,
+                    dates_discovered=dates_discovered,
+                    dates_processed=processed,
+                    records_saved=saved,
                 )
-                self.log(
-                    sync_id,
-                    "No attendance dates needed saving."
-                    if not candidate_failures
-                    else f"Finished with {candidate_failures} candidate read error(s) and no dates to save.",
-                )
-                return
 
-            failures = 0
-            for index, day in enumerate(selected_dates, start=1):
-                if self.cancel_event.is_set():
-                    raise SyncCancelled("Sync cancelled by the administrator.")
-                self.update(
-                    sync_id,
-                    progress_step="processing_dates",
-                    progress_current=index,
-                    progress_total=total,
-                    message=f"Processing Date {index} of {total}",
-                )
-                try:
-                    attendance_day = parse_date(day)
-                    if attendance_day is None:
-                        raise PortalError(f"Unreadable attendance date {day}")
-                    self.update(sync_id, progress_step="reconciling", message="Calculating attendance")
-                    summary, result = reconcile_punch_date(
-                        attendance_day=attendance_day,
-                        day_punches=by_date.get(day, []),
-                        candidates=candidates,
-                        rules=rules,
-                    )
-                    with transaction() as conn:
-                        _upsert_summary(conn, batch_id, summary)
-                        written = _persist_date(
-                            conn,
-                            batch_id,
-                            summary,
-                            result,
-                            sync_id,
-                            replace=mode in {"full", "range"},
-                        )
-                    saved += written
-                    processed += 1
-                    self.update(sync_id, dates_processed=processed, records_saved=saved)
-                except SyncCancelled:
-                    raise
-                except Exception as exc:
-                    failures += 1
-                    self.log(sync_id, f"{day}: {exc}")
-                    logger.exception("Date %s failed", day)
             if self.cancel_event.is_set():
                 raise SyncCancelled("Sync cancelled by the administrator.")
             with transaction() as conn:
                 from .reporting import recalculate_all
 
-                recalculate_all(conn, rules)
-            status = "completed" if failures < max(total, 1) else "failed"
-            if failures and failures == total:
+                recalculate_all(conn, rules_base)
+
+            total_batches = len(batches)
+            status = "completed"
+            if batch_failures == total_batches:
                 status = "failed"
+            elif batch_failures or (date_failures and processed == 0 and saved == 0):
+                status = "failed" if saved == 0 and processed == 0 else "completed"
             if candidate_failures and status == "completed":
-                self.log(sync_id, f"{candidate_failures} candidate(s) could not be read; other records were saved.")
+                self.log(
+                    sync_id,
+                    f"{candidate_failures} candidate(s) could not be read; other records were saved.",
+                )
+            if batch_failures and status == "completed":
+                self.log(sync_id, f"{batch_failures} batch(es) failed; other batches were saved.")
+            centre_note = f" · {total_batches} batch(es)" if total_batches > 1 else ""
             self.update(
                 sync_id,
                 status=status,
                 finished_at=now_iso(),
                 progress_step="completed" if status == "completed" else "failed",
-                message="Sync Completed" if status == "completed" else "Sync finished with errors. See the log.",
+                message=(
+                    f"Sync Completed{centre_note}"
+                    if status == "completed"
+                    else "Sync finished with errors. See the log."
+                ),
+                dates_discovered=dates_discovered,
                 dates_processed=processed,
                 records_saved=saved,
             )
@@ -314,6 +255,184 @@ class SyncManager:
                 message=message,
                 records_saved=saved,
             )
+
+    def _sync_one_batch(
+        self,
+        *,
+        sync_id: int,
+        mode: str,
+        date_from: str | None,
+        date_to: str | None,
+        stored: dict,
+        rules_base: dict,
+        batch_label: str,
+    ) -> tuple[int, int, int, int, int]:
+        """Sync one batch after the portal session is open. Returns saved, processed, discovered, candidate_failures, date_failures."""
+        rules = dict(rules_base)
+        batch = {
+            "state": stored.get("state"),
+            "pia": stored.get("pia"),
+            "sanction_order": stored.get("sanction_order"),
+            "training_center": stored.get("training_center"),
+            "batch_code": stored.get("batch_code"),
+            "batch_start_date": stored.get("batch_start_date"),
+            "expected_end_date": stored.get("expected_end_date"),
+        }
+        for key in ("training_start", "training_end", "lunch_start", "lunch_end"):
+            if stored.get(key):
+                rules[key] = stored[key]
+
+        with transaction() as conn:
+            from .db import set_json
+
+            set_json(conn, "batch", batch)
+            batch_id = upsert_batch(conn, batch)
+            candidates = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM candidates
+                    WHERE batch_id = ? OR batch_registration_number = ?
+                    ORDER BY sr_no, id
+                    """,
+                    (batch_id, batch.get("batch_code")),
+                )
+            ]
+        if not candidates:
+            raise PortalError(f"{batch_label}: import the master candidate workbook before syncing.")
+
+        all_punches: list[dict] = []
+        candidate_failures = 0
+        total_candidates = len(candidates)
+        self.update(
+            sync_id,
+            progress_step="extracting_records",
+            progress_current=0,
+            progress_total=total_candidates,
+            status="running",
+            message=f"{batch_label}: reading candidate 0 of {total_candidates}",
+        )
+        for index, candidate in enumerate(candidates, start=1):
+            if self.cancel_event.is_set():
+                raise SyncCancelled("Sync cancelled by the administrator.")
+            cid = clean_id(candidate.get("candidate_id"))
+            name = candidate.get("name") or cid or f"#{candidate.get('id')}"
+            self.update(
+                sync_id,
+                progress_step="extracting_records",
+                progress_current=index,
+                progress_total=total_candidates,
+                message=f"{batch_label}: reading {name} ({index} of {total_candidates})",
+            )
+            if not cid:
+                self.log(sync_id, f"{batch_label} · {name}: skipped — blank KP Id on the master list.")
+                candidate_failures += 1
+                continue
+            try:
+                rows, notes = self.portal.fetch_candidate_punches(cid)
+                for note in notes:
+                    self.log(sync_id, f"{batch_label}: {note}")
+                for row in rows:
+                    if not row.get("candidate_id"):
+                        row["candidate_id"] = cid
+                    row["attendance_id"] = None
+                    if not row.get("name"):
+                        row["name"] = candidate.get("name") or ""
+                all_punches.extend(rows)
+            except SyncCancelled:
+                raise
+            except Exception as exc:
+                candidate_failures += 1
+                self.log(sync_id, f"{batch_label} · {name} (KP Id {cid}): {exc}")
+                logger.exception("Candidate KP Id %s failed", cid)
+
+        by_date = group_punches_by_date(all_punches)
+        discovered_dates = sorted(by_date.keys())
+        with transaction() as conn:
+            existing = {
+                row["attendance_date"]: dict(row)
+                for row in conn.execute("SELECT * FROM attendance_dates WHERE batch_id = ?", (batch_id,))
+            }
+        selected_dates = filter_dates(
+            discovered_dates,
+            mode=mode,
+            date_from=date_from,
+            date_to=date_to,
+            existing=existing,
+        )
+        if mode == "range" and date_from and date_to:
+            missing = _dates_not_on_portal(
+                [{"date": day} for day in discovered_dates],
+                date_from,
+                date_to,
+            )
+            if missing:
+                self.log(
+                    sync_id,
+                    f"{batch_label}: no punches for "
+                    + ", ".join(missing[:40])
+                    + ("…" if len(missing) > 40 else ""),
+                )
+
+        saved = 0
+        processed = 0
+        failures = 0
+        total = len(selected_dates)
+        self.update(
+            sync_id,
+            progress_total=total,
+            status="running",
+            message=f"{batch_label}: calculating attendance",
+        )
+        if total == 0:
+            self.log(
+                sync_id,
+                f"{batch_label}: no attendance dates needed saving."
+                if not candidate_failures
+                else f"{batch_label}: finished with {candidate_failures} candidate read error(s) and no dates to save.",
+            )
+            return saved, processed, len(discovered_dates), candidate_failures, failures
+
+        for index, day in enumerate(selected_dates, start=1):
+            if self.cancel_event.is_set():
+                raise SyncCancelled("Sync cancelled by the administrator.")
+            self.update(
+                sync_id,
+                progress_step="processing_dates",
+                progress_current=index,
+                progress_total=total,
+                message=f"{batch_label}: date {index} of {total}",
+            )
+            try:
+                attendance_day = parse_date(day)
+                if attendance_day is None:
+                    raise PortalError(f"Unreadable attendance date {day}")
+                self.update(sync_id, progress_step="reconciling", message=f"{batch_label}: calculating attendance")
+                summary, result = reconcile_punch_date(
+                    attendance_day=attendance_day,
+                    day_punches=by_date.get(day, []),
+                    candidates=candidates,
+                    rules=rules,
+                )
+                with transaction() as conn:
+                    _upsert_summary(conn, batch_id, summary)
+                    written = _persist_date(
+                        conn,
+                        batch_id,
+                        summary,
+                        result,
+                        sync_id,
+                        replace=mode in {"full", "range"},
+                    )
+                saved += written
+                processed += 1
+            except SyncCancelled:
+                raise
+            except Exception as exc:
+                failures += 1
+                self.log(sync_id, f"{batch_label} · {day}: {exc}")
+                logger.exception("Date %s failed", day)
+        return saved, processed, len(discovered_dates), candidate_failures, failures
 
 
 def _friendly_sync_error(exc: Exception) -> str:

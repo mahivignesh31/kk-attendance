@@ -33,7 +33,7 @@ export default function Candidates() {
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!rows) return [];
-    return rows.filter((row) => !needle || `${row.name} ${row.candidate_id} ${row.attendance_id || ""}`.toLowerCase().includes(needle));
+    return rows.filter((row) => !needle || `${row.name} ${row.candidate_id}`.toLowerCase().includes(needle));
   }, [rows, query]);
 
   if (error) return <p className="text-sm text-red-700">{error}</p>;
@@ -65,7 +65,7 @@ export default function Candidates() {
         <table className="w-full min-w-[760px] text-left text-sm">
           <thead className="text-slate-500">
             <tr>
-              {["Name", "Candidate Id", "Attendance Id", "Status", "Working days", "Full", "Half", "Absent", "Credits", "Classroom %"].map((heading) => (
+              {["Name", "KP Id", "Status", "Working days", "Full", "Half", "Absent", "Credits", "Classroom %"].map((heading) => (
                 <th key={heading} className="px-4 py-3 font-medium">{heading}</th>
               ))}
             </tr>
@@ -75,7 +75,6 @@ export default function Candidates() {
               <tr key={row.id} className="border-t border-plum-50">
                 <td className="px-4 py-3"><Link className="font-medium text-plum-800" to={`/candidates/${row.id}`}>{row.name}</Link></td>
                 <td className="px-4 py-3">{row.candidate_id}</td>
-                <td className="px-4 py-3">{row.attendance_id || "—"}</td>
                 <td className="px-4 py-3">{row.candidate_status || "—"}</td>
                 <td className="px-4 py-3">{row.eligible_days}</td>
                 <td className="px-4 py-3">{row.full_days}</td>

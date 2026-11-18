@@ -37,6 +37,9 @@ DETAIL_HEADERS = {
     "sr no": "sr_no",
     "s no": "sr_no",
     "candidate id": "candidate_id",
+    "kp id": "candidate_id",
+    "kpid": "candidate_id",
+    "kaushal panjee id": "candidate_id",
     "candidate name": "name",
     "attendance id": "attendance_id",
     "device type": "device_type",
@@ -48,11 +51,14 @@ DETAIL_HEADERS = {
     "out device id": "out_device_id",
 }
 
-# Candidate Attendance Report (by Candidate ID) — punch history table.
+# Candidate Attendance Report (by KP Id / Candidate ID) — punch history table.
 CANDIDATE_PUNCH_HEADERS = {
     "sr no": "sr_no",
     "s no": "sr_no",
     "candidate id": "candidate_id",
+    "kp id": "candidate_id",
+    "kpid": "candidate_id",
+    "kaushal panjee id": "candidate_id",
     "attendance id": "attendance_id",
     "batch reg no": "batch_reg_no",
     "batch registration number": "batch_reg_no",
@@ -150,8 +156,8 @@ def parse_detail_table(
 ) -> tuple[list[dict], list[str]]:
     mapping = header_map(headers, DETAIL_HEADERS)
     warnings: list[str] = []
-    if "candidate_id" not in mapping.values() and "attendance_id" not in mapping.values() and "name" not in mapping.values():
-        return [], [f"{category} detail table has no candidate identifier column."]
+    if "candidate_id" not in mapping.values() and "name" not in mapping.values():
+        return [], [f"{category} detail table has no KP Id / Candidate Id column."]
     parsed: list[dict] = []
     for row in rows:
         if not any(clean_text(cell) for cell in row):
@@ -184,7 +190,6 @@ def parse_detail_table(
 def detail_key(row: dict) -> tuple:
     return (
         row.get("candidate_id") or "",
-        row.get("attendance_id") or "",
         row.get("name") or "",
         row.get("in_time") or "",
         row.get("out_time") or "",
@@ -199,12 +204,12 @@ def parse_candidate_punch_table(
     headers: list[object],
     rows: list[list[object]],
 ) -> tuple[list[dict], list[str]]:
-    """Parse the Candidate ID attendance report (Consume Date + In/Out punches)."""
+    """Parse the KP Id / Candidate ID attendance report (Consume Date + In/Out punches)."""
     mapping = header_map(headers, CANDIDATE_PUNCH_HEADERS)
     warnings: list[str] = []
     fields = set(mapping.values())
-    if "candidate_id" not in fields and "attendance_id" not in fields:
-        return [], ["Candidate punch table has no Candidate ID or Attendance ID column."]
+    if "candidate_id" not in fields:
+        return [], ["Candidate punch table has no KP Id / Candidate ID column."]
     if "consume_date" not in fields and "in_time" not in fields:
         return [], ["Candidate punch table has no Consume Date or In Time column."]
     parsed: list[dict] = []
@@ -284,7 +289,7 @@ def _find_candidate_punch_header_row(matrix: list[list[object]]) -> Optional[int
         mapping = header_map(row, CANDIDATE_PUNCH_HEADERS)
         fields = set(mapping.values())
         score = len(fields)
-        has_id = "candidate_id" in fields or "attendance_id" in fields
+        has_id = "candidate_id" in fields
         has_day = "consume_date" in fields or "in_time" in fields or "log_date" in fields
         if has_id and has_day and score > best_score:
             best_index = index

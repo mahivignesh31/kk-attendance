@@ -204,7 +204,7 @@ def import_punch_excels(
         recalculate_all(conn, global_rules)
         if total_processed == 0 and total_saved == 0:
             message = (
-                "No attendance was written. Excel Batch Reg No. or Candidate IDs did not match the "
+                "No attendance was written. Excel Batch Reg No. or KP Ids did not match the "
                 "selected centre batches. Existing stored attendance was left unchanged."
             )
             status = "failed"

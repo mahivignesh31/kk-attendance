@@ -34,13 +34,12 @@ export default function CellDialog({ candidatePk, date, onClose }) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xl font-semibold">{data.candidate.name}</p>
-              <p className="text-sm text-slate-500">Candidate Id {data.candidate.candidate_id}</p>
+              <p className="text-sm text-slate-500">KP Id {data.candidate.candidate_id}</p>
             </div>
             <span className={`rounded-full px-3 py-1 text-sm font-medium ring-1 ${meta.tone}`}>{meta.label}</span>
           </div>
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <Field label="Attendance date" value={longDate(data.date)} />
-            <Field label="Attendance Id" value={data.candidate.attendance_id || "—"} />
             <Field label="In time" value={record?.in_time || "—"} />
             <Field label="Out time" value={record?.out_time || "—"} />
             <Field label="Elapsed hours" value={record?.elapsed_label || hours(record?.elapsed_minutes)} />
@@ -78,7 +77,7 @@ export default function CellDialog({ candidatePk, date, onClose }) {
             </div>
           )}
           <p className="text-xs leading-5 text-slate-500">
-            SOP day rule: 0–15 min late/early = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent. One punch or out 00:00:00 = Full day. No punch = Absent. Grace: 2 in any 15 days, then Half day. Lunch is not subtracted.
+            SOP day rule: 0–15 min late/early = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent. One punch or out 00:00:00 still uses late/early (a late-only punch is not automatic Present). No punch = Absent. Grace: 2 in any 15 days, then Half day. Lunch is not subtracted.
           </p>
         </div>
       )}

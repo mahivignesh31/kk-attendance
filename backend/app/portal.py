@@ -445,11 +445,11 @@ class PortalClient:
         raise PortalError("Login was not completed within 20 minutes. No attendance was changed on the portal.")
 
     def fetch_candidate_punches(self, candidate_id: str) -> tuple[list[dict], list[str]]:
-        """Submit one Candidate ID and return every punch row for that person."""
+        """Submit one KP Id and return every punch row for that person."""
         self._guard_candidate_session()
         cid = (candidate_id or "").strip()
         if not cid:
-            return [], ["Skipped a candidate with a blank Candidate ID."]
+            return [], ["Skipped a candidate with a blank KP Id."]
         self._fill_candidate_id(cid)
         self._click_submit()
         self._wait_until_settled()
@@ -458,7 +458,7 @@ class PortalClient:
         if excel_rows is not None:
             return excel_rows, excel_warnings
         if not self._wait_for_candidate_table(timeout=30):
-            return [], [f"No punch rows returned for Candidate ID {cid}."]
+            return [], [f"No punch rows returned for KP Id {cid}."]
         return self._collect_candidate_punches()
 
     def _wait_for_candidate_table(self, timeout: int) -> bool:
@@ -525,13 +525,18 @@ class PortalClient:
             text = (self.page.inner_text("body") or "")[:8000].lower()
         except Exception:
             return False
-        return "enter candidate id" in text or ("candidate id" in text and "attendance id" in text and "or" in text)
+        return (
+            "enter candidate id" in text
+            or "enter kp id" in text
+            or (("candidate id" in text or "kp id" in text) and "attendance id" in text and "or" in text)
+        )
 
     def _candidate_id_form_visible(self) -> bool:
+        kp_pattern = re.compile(r"(kp\s*id|kaushal\s*panjee\s*id|candidate\s*id)", re.I)
         try:
-            if self.page.get_by_placeholder(re.compile(r"candidate\s*id", re.I)).count():
+            if self.page.get_by_placeholder(kp_pattern).count():
                 return True
-            if self.page.get_by_label(re.compile(r"candidate\s*id", re.I)).count():
+            if self.page.get_by_label(kp_pattern).count():
                 return True
         except Exception:
             pass
@@ -539,7 +544,7 @@ class PortalClient:
             text = norm_header(self.page.inner_text("body")[:4000])
         except Exception:
             return False
-        return "candidate id" in text and "attendance id" in text
+        return ("candidate id" in text or "kp id" in text) and "attendance id" in text
 
     def _open_candidate_details_menu(self) -> None:
         for pattern in (r"DDUGKY\s*REPORT", r"DDU-?\s*GKY\s*REPORT", r"^\s*REPORT\s*$"):
@@ -549,12 +554,40 @@ class PortalClient:
         self._click_text(r"CANDIDATE\s+ATTENDANCE\s+REPORT")
         self._wait_for_app()
 
+    def _clear_attendance_id_fields(self) -> None:
+        """Leave Attendance Id blank so the portal OR form uses KP Id only."""
+        patterns = (
+            re.compile(r"attendance\s*id", re.I),
+            re.compile(r"^\s*Attendance\s+ID\s*$", re.I),
+        )
+        for pattern in patterns:
+            try:
+                for locator in (
+                    self.page.get_by_placeholder(pattern),
+                    self.page.get_by_label(pattern),
+                ):
+                    if locator.count():
+                        locator.first.fill("")
+            except Exception:
+                pass
+        try:
+            label = self.page.get_by_text(re.compile(r"^\s*Attendance\s+ID\s*$", re.I))
+            if label.count():
+                nearby = label.first.locator(
+                    "xpath=following::input[not(@type='hidden')][1] | ../following::input[not(@type='hidden')][1]"
+                )
+                if nearby.count():
+                    nearby.first.fill("")
+        except Exception:
+            pass
+
     def _fill_candidate_id(self, candidate_id: str) -> None:
+        """Type KP Id into Candidate/KP Id only — never into Attendance Id."""
+        kp_pattern = re.compile(r"(kp\s*id|kaushal\s*panjee\s*id|candidate\s*id)", re.I)
         field = None
         for locator in (
-            self.page.get_by_placeholder(re.compile(r"candidate\s*id", re.I)),
-            self.page.get_by_label(re.compile(r"^\s*candidate\s*id\s*$", re.I)),
-            self.page.locator("input").filter(has=self.page.locator("xpath=..")).first,
+            self.page.get_by_placeholder(kp_pattern),
+            self.page.get_by_label(kp_pattern),
         ):
             try:
                 if locator.count() == 0:
@@ -566,8 +599,7 @@ class PortalClient:
             except Exception:
                 continue
         if field is None:
-            # Label → following input
-            label = self.page.get_by_text(re.compile(r"^\s*Candidate\s+ID\s*$", re.I))
+            label = self.page.get_by_text(re.compile(r"^\s*(KP\s*Id|Kaushal\s*Panjee\s*Id|Candidate\s+ID)\s*$", re.I))
             if label.count():
                 nearby = label.first.locator(
                     "xpath=following::input[not(@type='hidden')][1] | ../following::input[not(@type='hidden')][1]"
@@ -575,20 +607,13 @@ class PortalClient:
                 if nearby.count():
                     field = nearby.first
         if field is None:
-            inputs = self.page.locator("input[type='text'], input:not([type])")
-            if inputs.count() == 0:
-                raise PortalError("The Candidate ID input was not found.")
-            field = inputs.first
+            raise PortalError("The KP Id / Candidate ID input was not found. Attendance Id is not used.")
+        # Clear Attendance Id first so an OR search cannot use it.
+        self._clear_attendance_id_fields()
         field.click()
         field.fill("")
         field.fill(candidate_id)
-        # Clear Attendance ID so the OR form uses Candidate ID only.
-        try:
-            aid = self.page.get_by_placeholder(re.compile(r"attendance\s*id", re.I))
-            if aid.count():
-                aid.first.fill("")
-        except Exception:
-            pass
+        self._clear_attendance_id_fields()
 
     def _try_download_candidate_excel(self, candidate_id: str) -> tuple[Optional[list[dict]], list[str]]:
         button = self.page.get_by_role("button", name=re.compile(r"download\s*excel", re.I))
@@ -1069,7 +1094,7 @@ class PortalClient:
                     score = 100 + len(rows)
                 elif kind == "candidate_punches" and (
                     ("consume date" in headers or "log date" in headers or "in time" in headers)
-                    and ("candidate id" in headers or "attendance id" in headers)
+                    and ("candidate id" in headers or "kp id" in headers)
                 ):
                     score = 120 + len(rows)
                 elif kind == "detail" and ("candidate id" in headers or "in time" in headers):

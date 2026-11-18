@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { api, apiUrl } from "../api";
 import { stamp } from "../utils";
@@ -28,24 +28,50 @@ export default function SyncPage() {
   const [files, setFiles] = useState([]);
   const [showExcel, setShowExcel] = useState(false);
   const [cloudBlocked, setCloudBlocked] = useState(false);
-  const [batchCode, setBatchCode] = useState("");
+  const [centres, setCentres] = useState([]);
+  const [centreId, setCentreId] = useState("");
+  const [centreBatches, setCentreBatches] = useState([]);
+  const [queue, setQueue] = useState([]);
   const [remoteBrowser, setRemoteBrowser] = useState(false);
   const [remoteBrowserPath, setRemoteBrowserPath] = useState("");
   const [showLive, setShowLive] = useState(true);
 
+  const selectedCentre = useMemo(
+    () => centres.find((item) => String(item.id) === String(centreId)) || null,
+    [centres, centreId]
+  );
+
   const refresh = () => {
     api("/api/sync/current").then((payload) => setCurrent(payload.sync)).catch((err) => setError(err.message));
     api("/api/sync/history").then((payload) => setHistory(payload.history)).catch(() => {});
+    api("/api/admin/publish-queue")
+      .then((payload) => setQueue(payload.queue || []))
+      .catch(() => {});
+  };
+
+  const loadCentreScope = async (id) => {
+    const boot = await api("/api/bootstrap");
+    setCentres(boot.centres || []);
+    const nextId = id || boot.active_centre_id || boot.centres?.[0]?.id || "";
+    setCentreId(nextId ? String(nextId) : "");
+    setCentreBatches(boot.batches || []);
+    setCloudBlocked(Boolean(boot.cloud_sync_blocked));
+    setRemoteBrowser(Boolean(boot.remote_browser));
+    setRemoteBrowserPath(boot.remote_browser_path || "");
+    return boot;
   };
 
   useEffect(() => {
     api("/api/bootstrap")
-      .then((payload) => {
+      .then(async (payload) => {
         setRole(payload.user?.role || "admin");
         setCloudBlocked(Boolean(payload.cloud_sync_blocked));
         setRemoteBrowser(Boolean(payload.remote_browser));
         setRemoteBrowserPath(payload.remote_browser_path || "");
-        setBatchCode(payload.batch?.batch_code || "");
+        setCentres(payload.centres || []);
+        const nextId = payload.active_centre_id || payload.centres?.[0]?.id || "";
+        setCentreId(nextId ? String(nextId) : "");
+        setCentreBatches(payload.batches || []);
       })
       .catch(() => setRole("admin"));
     refresh();
@@ -62,9 +88,37 @@ export default function SyncPage() {
   const stepIndex = STEPS.findIndex((step) => step[0] === current?.progress_step);
   const browserSrc = remoteBrowserPath ? apiUrl(remoteBrowserPath) : "";
 
-  async function startLive() {
+  async function selectCentre(nextId) {
     setError("");
     setMessage("");
+    if (!nextId) return;
+    setBusy(true);
+    try {
+      const result = await api("/api/centres/activate", {
+        method: "POST",
+        body: JSON.stringify({ centre_id: Number(nextId) }),
+      });
+      setCentreId(String(nextId));
+      setCentreBatches(result.batches || []);
+      setMessage(
+        `${result.centre?.name || "Centre"} selected · ${(result.batches || []).length} batch(es). One sync reads every batch.`
+      );
+      await loadCentreScope(nextId);
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startLive({ allCentres = false } = {}) {
+    setError("");
+    setMessage("");
+    if (!allCentres && !centreId) {
+      setError("Select a training centre first.");
+      return;
+    }
     if (mode === "date" && !dateFrom) {
       setError("Choose the date to check.");
       return;
@@ -78,10 +132,22 @@ export default function SyncPage() {
     const to = mode === "date" ? dateFrom : mode === "range" ? dateTo : null;
     setBusy(true);
     try {
-      await api("/api/sync/start", {
+      const result = await api("/api/sync/start", {
         method: "POST",
-        body: JSON.stringify({ mode: payloadMode, date_from: from, date_to: to }),
+        body: JSON.stringify({
+          mode: payloadMode,
+          date_from: from,
+          date_to: to,
+          centre_id: allCentres ? null : Number(centreId),
+          all_centres: allCentres,
+        }),
       });
+      const count = result.batch_count || result.batch_codes?.length || 0;
+      setMessage(
+        allCentres
+          ? `Sync started for all centres (${count} batches).`
+          : `Sync started for ${selectedCentre?.name || "centre"} · ${count} batch(es).`
+      );
       setShowLive(true);
       refresh();
     } catch (err) {
@@ -91,16 +157,21 @@ export default function SyncPage() {
     }
   }
 
-  async function publishOnline() {
+  async function publishOnline(allCentres = false) {
     setError("");
     setMessage("");
     setBusy(true);
     try {
       const result = await api("/api/admin/publish-online", {
         method: "POST",
-        body: JSON.stringify({ batch_code: batchCode || null }),
+        body: JSON.stringify(
+          allCentres
+            ? { all_centres: true }
+            : { batch_code: centreBatches[0]?.batch_code || null, all_centres: false }
+        ),
       });
       setMessage(result.message || "Published to online centres.");
+      refresh();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -144,16 +215,61 @@ export default function SyncPage() {
     }
   }
 
+  const centreQueue = queue.filter((item) => String(item.centre_id) === String(centreId));
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Admin portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          Only the administrator syncs attendance (Chromium on this Mac). Centre logins view reports online and cannot sync.
-          After a local sync, click <span className="font-medium text-slate-700">Publish to online centres</span> so their reports update.
+          Select a <span className="font-medium text-slate-700">training centre</span>, then sync{" "}
+          <span className="font-medium text-slate-700">all of its batches</span> with one button. After syncing, publish online so centre logins can see reports.
         </p>
-        {batchCode && <p className="mt-2 text-sm text-slate-600">Batch on screen: <span className="font-semibold">{batchCode}</span></p>}
       </div>
+
+      <section className="rounded-2xl bg-white p-5 shadow-card">
+        <h2 className="font-semibold">Training centre</h2>
+        <p className="mt-1 text-sm text-slate-500">Pick the centre only. Every batch under it is listed below and synced together.</p>
+        <label className="mt-4 block text-sm text-slate-600">
+          Centre
+          <select
+            className="mt-1 w-full max-w-md rounded-xl border border-plum-100 px-3 py-2 text-ink"
+            value={centreId}
+            onChange={(event) => selectCentre(event.target.value)}
+            disabled={busy || running}
+          >
+            <option value="">Select training centre</option>
+            {centres.map((centre) => (
+              <option key={centre.id} value={centre.id}>
+                {centre.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="mt-4 space-y-2">
+          {(centreBatches.length ? centreBatches : centreQueue).map((item) => {
+            const code = item.batch_code;
+            const records = queue.find((row) => row.batch_code === code)?.record_count;
+            return (
+              <div key={code} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-plum-50 px-3 py-2 text-sm text-slate-700">
+                <div>
+                  <span className="font-semibold">{selectedCentre?.name || item.training_center || item.centre_name || "Centre"}</span>
+                  <span className="text-slate-500">
+                    {" "}
+                    · {code} · {item.candidate_count || 0} candidates
+                    {records != null ? ` · ${records} records` : ""}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+          {centreId && centreBatches.length === 0 && centreQueue.length === 0 && (
+            <p className="text-sm text-slate-500">This centre has no batches yet.</p>
+          )}
+          {!centreId && <p className="text-sm text-slate-500">Select a training centre to see its batches.</p>}
+        </div>
+      </section>
 
       {cloudBlocked && (
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
@@ -164,13 +280,14 @@ export default function SyncPage() {
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <h2 className="font-semibold">Chromium sync (administrator)</h2>
         <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-          <li>On your Mac open the local app and run <span className="font-medium">scripts/open-kaushal-chrome.sh</span></li>
-          <li>Sign into Kaushal in that Chrome window</li>
-          <li>Start sync below for the batch on screen</li>
-          <li>Publish to online so every centre login can see the reports</li>
+          <li>Run <span className="font-medium">scripts/open-kaushal-chrome.sh</span> and sign into Kaushal</li>
+          <li>Select the training centre above</li>
+          <li>Click <span className="font-medium">Sync all batches for this centre</span></li>
+          <li>When finished, click <span className="font-medium">Publish all centres</span></li>
         </ol>
 
-        <div className="mt-5 flex flex-wrap gap-4 text-sm">
+        <p className="mt-4 text-sm text-slate-500">Sync covers completed days only — through yesterday (IST). Today is never synced.</p>
+        <div className="mt-3 flex flex-wrap gap-4 text-sm">
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only</label>
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> All dates</label>
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> One date</label>
@@ -196,16 +313,19 @@ export default function SyncPage() {
         )}
 
         <div className="mt-5 flex flex-wrap gap-3">
-          <button type="button" disabled={busy || running || cloudBlocked} onClick={startLive} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
-            START CHROMIUM SYNC
+          <button type="button" disabled={busy || running || cloudBlocked || !centreId} onClick={() => startLive({ allCentres: false })} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+            SYNC ALL BATCHES FOR THIS CENTRE
+          </button>
+          <button type="button" disabled={busy || running || cloudBlocked} onClick={() => startLive({ allCentres: true })} className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold disabled:opacity-50">
+            Sync every centre
           </button>
           {running && (
             <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
               Stop sync
             </button>
           )}
-          <button type="button" disabled={busy || running} onClick={publishOnline} className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold disabled:opacity-50">
-            PUBLISH TO ONLINE CENTRES
+          <button type="button" disabled={busy || running} onClick={() => publishOnline(true)} className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold disabled:opacity-50">
+            PUBLISH ALL CENTRES
           </button>
           {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
             <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/login-done", { method: "POST" })}>
@@ -214,7 +334,7 @@ export default function SyncPage() {
           )}
         </div>
         {completed && !cloudBlocked && (
-          <p className="mt-3 text-sm text-emerald-700">Local sync finished. Publish to online so centre logins can see this batch’s reports.</p>
+          <p className="mt-3 text-sm text-emerald-700">Local sync finished. Publish online so centre logins can see the reports.</p>
         )}
         {message && <p className="mt-3 text-sm text-emerald-700">{message}</p>}
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}

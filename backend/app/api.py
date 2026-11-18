@@ -66,6 +66,8 @@ class SyncBody(BaseModel):
     mode: str = "incremental"
     date_from: str | None = None
     date_to: str | None = None
+    centre_id: int | None = None
+    all_centres: bool = False
 
 
 class ResetBody(BaseModel):
@@ -100,10 +102,22 @@ def bootstrap():
         issues = conn.execute("SELECT COUNT(*) AS count FROM reconciliation_issues WHERE resolved = 0").fetchone()["count"]
         current = conn.execute("SELECT * FROM sync_history ORDER BY id DESC LIMIT 1").fetchone()
         user = _user()
+        active_centre_id = get_json(conn, "active_centre_id")
+        if isinstance(active_centre_id, dict):
+            active_centre_id = active_centre_id.get("id")
+        try:
+            active_centre_id = int(active_centre_id) if active_centre_id is not None else None
+        except (TypeError, ValueError):
+            active_centre_id = None
         if user.get("role") == "centre" and user.get("centre_id"):
+            active_centre_id = user.get("centre_id")
+            centres = conn.execute(
+                "SELECT id, name, code FROM training_centres WHERE id = ? ORDER BY name",
+                (user["centre_id"],),
+            ).fetchall()
             batches = conn.execute(
                 """
-                SELECT batch_code, batch_start_date, (
+                SELECT batch_code, batch_start_date, centre_id, training_center, (
                     SELECT COUNT(*) FROM candidates c
                     WHERE c.batch_id = batches.id OR c.batch_registration_number = batches.batch_code
                 ) AS candidate_count
@@ -114,20 +128,56 @@ def bootstrap():
                 (user["centre_id"],),
             ).fetchall()
         else:
-            batches = conn.execute(
-                """
-                SELECT batch_code, batch_start_date, (
-                    SELECT COUNT(*) FROM candidates c
-                    WHERE c.batch_id = batches.id OR c.batch_registration_number = batches.batch_code
-                ) AS candidate_count
-                FROM batches
-                ORDER BY batch_start_date, batch_code
-                """
-            ).fetchall()
+            centres = conn.execute("SELECT id, name, code FROM training_centres ORDER BY name").fetchall()
+            if active_centre_id is None and centres:
+                # Prefer centre of the active batch when set.
+                active_code = (context.get("batch") or {}).get("batch_code")
+                if active_code:
+                    row = conn.execute(
+                        "SELECT centre_id FROM batches WHERE batch_code = ?",
+                        (active_code,),
+                    ).fetchone()
+                    if row and row["centre_id"]:
+                        active_centre_id = int(row["centre_id"])
+                if active_centre_id is None:
+                    active_centre_id = int(centres[0]["id"])
+            if active_centre_id is not None:
+                batches = conn.execute(
+                    """
+                    SELECT batch_code, batch_start_date, centre_id, training_center, (
+                        SELECT COUNT(*) FROM candidates c
+                        WHERE c.batch_id = batches.id OR c.batch_registration_number = batches.batch_code
+                    ) AS candidate_count
+                    FROM batches
+                    WHERE centre_id = ?
+                    ORDER BY batch_start_date, batch_code
+                    """,
+                    (active_centre_id,),
+                ).fetchall()
+            else:
+                batches = conn.execute(
+                    """
+                    SELECT batch_code, batch_start_date, centre_id, training_center, (
+                        SELECT COUNT(*) FROM candidates c
+                        WHERE c.batch_id = batches.id OR c.batch_registration_number = batches.batch_code
+                    ) AS candidate_count
+                    FROM batches
+                    ORDER BY batch_start_date, batch_code
+                    """
+                ).fetchall()
+        active_centre = None
+        if active_centre_id is not None:
+            for row in centres:
+                if int(row["id"]) == int(active_centre_id):
+                    active_centre = dict(row)
+                    break
     return {
         "user": public_account(user),
         "batch": context["batch"],
         "batches": [dict(row) for row in batches],
+        "centres": [dict(row) for row in centres],
+        "active_centre_id": active_centre_id,
+        "active_centre": active_centre,
         "rules": context["rules"],
         "candidate_count": count,
         "open_issues": issues,
@@ -512,7 +562,7 @@ def recalculate_attendance():
             "16–60 min → Full day + 1 grace",
             "61–240 min → Half day",
             "> 4 hours → Absent",
-            "One punch / out 00:00:00 → Full day",
+            "One punch / out 00:00:00 → still apply late/early (not auto Present)",
             "No punch on a working day → Absent",
         ],
     }
@@ -520,6 +570,7 @@ def recalculate_attendance():
 
 class PublishBody(BaseModel):
     batch_code: str | None = None
+    all_centres: bool = False
 
 
 @router.post("/admin/import-attendance")
@@ -538,19 +589,33 @@ async def import_attendance_publish(request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/admin/publish-online")
-def publish_attendance_online(body: PublishBody):
-    """Local admin: push the active (or named) batch attendance to the online Railway API."""
+@router.get("/admin/publish-queue")
+def publish_queue():
+    """Ordered list of centres/batches to sync and publish one at a time."""
     _require_admin()
-    from .publish import publish_batch_to_online
-    from .reporting import load_context
+    from .publish import list_publish_queue
 
     with read_conn() as conn:
-        context = load_context(conn)
-        code = (body.batch_code or (context.get("batch") or {}).get("batch_code") or "").strip()
-    if not code:
-        raise HTTPException(status_code=400, detail="Select a batch before publishing to online.")
+        queue = list_publish_queue(conn)
+    return {"queue": queue, "total": len(queue)}
+
+
+@router.post("/admin/publish-online")
+def publish_attendance_online(body: PublishBody):
+    """Local admin: publish one batch, or every centre/batch one at a time."""
+    _require_admin()
+    from .publish import publish_all_batches_to_online, publish_batch_to_online
+    from .reporting import load_context
+
     try:
+        if body.all_centres:
+            with read_conn() as conn:
+                return publish_all_batches_to_online(conn)
+        with read_conn() as conn:
+            context = load_context(conn)
+            code = (body.batch_code or (context.get("batch") or {}).get("batch_code") or "").strip()
+        if not code:
+            raise HTTPException(status_code=400, detail="Select a batch, or choose Publish all centres.")
         with read_conn() as conn:
             return publish_batch_to_online(conn, code)
     except ValueError as exc:
@@ -607,6 +672,63 @@ class BatchActivate(BaseModel):
     batch_code: str
 
 
+class CentreActivate(BaseModel):
+    centre_id: int
+
+
+@router.post("/centres/activate")
+def activate_centre(body: CentreActivate):
+    """Admin: select a training centre — all its batches become the sync/report scope."""
+    _require_admin()
+    centre_id = int(body.centre_id)
+    with transaction() as conn:
+        centre = conn.execute("SELECT * FROM training_centres WHERE id = ?", (centre_id,)).fetchone()
+        if centre is None:
+            raise HTTPException(status_code=404, detail="Training centre was not found.")
+        set_json(conn, "active_centre_id", centre_id)
+        batches = conn.execute(
+            """
+            SELECT * FROM batches
+            WHERE centre_id = ?
+            ORDER BY batch_start_date, batch_code
+            """,
+            (centre_id,),
+        ).fetchall()
+        batch_rows = [dict(row) for row in batches]
+        if batch_rows:
+            first = batch_rows[0]
+            current = get_json(conn, "batch") or {}
+            current.update(
+                {
+                    "state": first["state"] or current.get("state"),
+                    "pia": first["pia"] or current.get("pia"),
+                    "sanction_order": first["sanction_order"] or current.get("sanction_order"),
+                    "training_center": first["training_center"] or centre["name"],
+                    "batch_code": first["batch_code"],
+                    "batch_start_date": first["batch_start_date"],
+                    "expected_end_date": first["expected_end_date"],
+                }
+            )
+            set_json(conn, "batch", current)
+        else:
+            current = get_json(conn, "batch") or {}
+            current["training_center"] = centre["name"]
+            set_json(conn, "batch", current)
+    return {
+        "centre": {"id": centre["id"], "name": centre["name"], "code": centre["code"]},
+        "batches": [
+            {
+                "batch_code": row["batch_code"],
+                "batch_start_date": row["batch_start_date"],
+                "training_center": row["training_center"],
+                "centre_id": row["centre_id"],
+            }
+            for row in batch_rows
+        ],
+        "batch": current,
+    }
+
+
 @router.post("/batches/activate")
 def activate_batch(body: BatchActivate):
     code = body.batch_code.strip()
@@ -647,6 +769,8 @@ def activate_batch(body: BatchActivate):
             }
         )
         set_json(conn, "batch", current)
+        if row["centre_id"] is not None:
+            set_json(conn, "active_centre_id", int(row["centre_id"]))
     return {"batch": current}
 
 
@@ -757,15 +881,64 @@ def sync_start(body: SyncBody):
         raise HTTPException(status_code=400, detail="Choose one date, or a start and end date.")
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="The range start is after the range end.")
+    batch_codes: list[str] = []
     with read_conn() as conn:
         from .reporting import load_context
 
-        batch_code = (load_context(conn)["batch"] or {}).get("batch_code") or None
+        if body.all_centres:
+            rows = conn.execute(
+                "SELECT batch_code FROM batches ORDER BY training_center, batch_code"
+            ).fetchall()
+            batch_codes = [row["batch_code"] for row in rows if row["batch_code"]]
+            if not batch_codes:
+                raise HTTPException(status_code=400, detail="No batches found to sync.")
+        elif body.centre_id is not None:
+            centre = conn.execute(
+                "SELECT id, name FROM training_centres WHERE id = ?",
+                (int(body.centre_id),),
+            ).fetchone()
+            if centre is None:
+                raise HTTPException(status_code=404, detail="Training centre was not found.")
+            rows = conn.execute(
+                """
+                SELECT batch_code FROM batches
+                WHERE centre_id = ?
+                ORDER BY batch_start_date, batch_code
+                """,
+                (int(body.centre_id),),
+            ).fetchall()
+            batch_codes = [row["batch_code"] for row in rows if row["batch_code"]]
+            if not batch_codes:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{centre['name']} has no batches to sync yet.",
+                )
+        else:
+            active_centre_id = get_json(conn, "active_centre_id")
+            try:
+                active_centre_id = int(active_centre_id) if active_centre_id is not None else None
+            except (TypeError, ValueError):
+                active_centre_id = None
+            if active_centre_id is not None:
+                rows = conn.execute(
+                    """
+                    SELECT batch_code FROM batches
+                    WHERE centre_id = ?
+                    ORDER BY batch_start_date, batch_code
+                    """,
+                    (active_centre_id,),
+                ).fetchall()
+                batch_codes = [row["batch_code"] for row in rows if row["batch_code"]]
+            if not batch_codes:
+                code = (load_context(conn)["batch"] or {}).get("batch_code") or None
+                batch_codes = [code] if code else []
+            if not batch_codes:
+                raise HTTPException(status_code=400, detail="Select a training centre before syncing.")
     try:
-        sync_id = manager.start(body.mode, date_from, date_to, batch_code)
+        sync_id = manager.start(body.mode, date_from, date_to, batch_codes=batch_codes)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"sync_id": sync_id}
+    return {"sync_id": sync_id, "batch_codes": batch_codes, "batch_count": len(batch_codes)}
 
 
 @router.post("/sync/cancel")

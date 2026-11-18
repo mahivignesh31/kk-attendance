@@ -96,8 +96,6 @@ def reconcile_date(
             key = ("pk", int(match.candidate["id"]))
         elif row.get("candidate_id"):
             key = ("cid", row["candidate_id"])
-        elif row.get("attendance_id"):
-            key = ("aid", row["attendance_id"])
         else:
             key = ("row", row.get("sr_no"), normalize_name(row.get("name")))
         grouped.setdefault(key, []).append(row)
@@ -113,7 +111,7 @@ def reconcile_date(
             category = row.get("category")
             if category in COUNT_FIELDS and category not in categories:
                 categories.append(category)
-            identity = row.get("candidate_id") or row.get("attendance_id") or row.get("name") or key
+            identity = row.get("candidate_id") or row.get("name") or key
             extracted_counts.setdefault(category, set()).add(identity)
         if match.warning:
             issues.append(

@@ -86,27 +86,51 @@ export default function Layout({ onSignedOut }) {
               {open ? <X size={18} /> : <Menu size={18} />}
             </button>
             <div>
-              <div className="text-sm font-semibold">{boot?.user?.centre_name || boot?.batch?.training_center || "Attendance"}</div>
-              <label className="mt-1 block text-xs text-slate-500">
-                Batch on screen
-                <select
-                  className="mt-1 block rounded-lg border border-plum-100 bg-white px-2 py-1 text-sm font-semibold text-ink"
-                  value={boot?.batch?.batch_code || ""}
-                  onChange={async (event) => {
-                    const code = event.target.value;
-                    if (!code) return;
-                    await api("/api/batches/activate", { method: "POST", body: JSON.stringify({ batch_code: code }) });
-                    setBoot(await api("/api/bootstrap"));
-                  }}
-                >
-                  {(boot?.batches || []).length === 0 && <option value="">No batch yet</option>}
-                  {(boot?.batches || []).map((batch) => (
-                    <option key={batch.batch_code} value={batch.batch_code}>
-                      {batch.batch_code} · {batch.candidate_count} candidates
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="text-sm font-semibold">{boot?.user?.centre_name || boot?.active_centre?.name || boot?.batch?.training_center || "Attendance"}</div>
+              <div className="mt-1 flex flex-wrap items-end gap-3">
+                {!centreLogin && (
+                  <label className="block text-xs text-slate-500">
+                    Training centre
+                    <select
+                      className="mt-1 block min-w-[10rem] rounded-lg border border-plum-100 bg-white px-2 py-1 text-sm font-semibold text-ink"
+                      value={boot?.active_centre_id || ""}
+                      onChange={async (event) => {
+                        const id = event.target.value;
+                        if (!id) return;
+                        await api("/api/centres/activate", { method: "POST", body: JSON.stringify({ centre_id: Number(id) }) });
+                        setBoot(await api("/api/bootstrap"));
+                      }}
+                    >
+                      {(boot?.centres || []).length === 0 && <option value="">No centre yet</option>}
+                      {(boot?.centres || []).map((centre) => (
+                        <option key={centre.id} value={centre.id}>
+                          {centre.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label className="block text-xs text-slate-500">
+                  Batch ID
+                  <select
+                    className="mt-1 block min-w-[12rem] rounded-lg border border-plum-100 bg-white px-2 py-1 text-sm font-semibold text-ink"
+                    value={boot?.batch?.batch_code || ""}
+                    onChange={async (event) => {
+                      const code = event.target.value;
+                      if (!code) return;
+                      await api("/api/batches/activate", { method: "POST", body: JSON.stringify({ batch_code: code }) });
+                      setBoot(await api("/api/bootstrap"));
+                    }}
+                  >
+                    {(boot?.batches || []).length === 0 && <option value="">No batch yet</option>}
+                    {(boot?.batches || []).map((batch) => (
+                      <option key={batch.batch_code} value={batch.batch_code}>
+                        {batch.batch_code} · {batch.candidate_count} candidates
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">

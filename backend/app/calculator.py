@@ -1,8 +1,7 @@
-"""Local attendance-hour rules.
+"""Local attendance-hour rules (DDU-GKY SOP SF 4.3E / SF 6.3B).
 
-These calculations belong to this dashboard. They are not an official DDU-GKY
-attendance policy. Official portal statuses are stored separately and are never
-replaced by a calculated status.
+Classroom day status and attendance % use these SOP hour rules. Portal category
+labels are stored for reference and warnings; they do not override SOP marks.
 """
 
 from __future__ import annotations
@@ -269,13 +268,15 @@ def calculate_hours(
     16–60 min → full day + 1 grace
     61–240 min → half day
     > 4 hours → absent
-    Only one punch / out 00:00:00 → full day
+    One punch / out 00:00:00 still uses late/early vs the timetable
+    (a 17:42-only punch is Absent, not an automatic Present).
     No punch on a working day → absent (handled by callers)
     """
     del lunch_start, lunch_end, full_day_hours, half_day_hours, clip_start, clip_end
     invalid = False
     missing = False
     lone_in: list[time] = []
+    lone_out: list[time] = []
     intervals: list[tuple[datetime, datetime]] = []
     points: list[datetime] = []
 
@@ -292,6 +293,7 @@ def calculate_hours(
             continue
         if out_time and not session.in_time:
             missing = True
+            lone_out.append(out_time)
             continue
         if not session.in_time or not out_time:
             continue
@@ -305,19 +307,40 @@ def calculate_hours(
             continue
         intervals.append((start, end))
 
+    shift_minutes = 540
+    if schedule_start and schedule_end:
+        shift_minutes = max(0, _clock_minutes(schedule_start, schedule_end))
+
+    # One punch / midnight out: still score late/early against the timetable.
     if not intervals and not points:
-        if lone_in or missing:
+        if not lone_in and not lone_out and not missing:
+            return HourResult(None, 0, None, "incomplete", invalid, False, False)
+        if schedule_start is None or schedule_end is None:
             return HourResult(None, 0, None, "full_day", invalid, True, False)
-        return HourResult(None, 0, None, "incomplete", invalid, False, False)
+        late = 0
+        early = 0
+        if lone_in:
+            first_in = datetime.combine(day, min(lone_in))
+            late = max(0, int((first_in - datetime.combine(day, schedule_start)).total_seconds()) // 60)
+        if lone_out:
+            last_out = datetime.combine(day, max(lone_out))
+            early = max(0, int((datetime.combine(day, schedule_end) - last_out).total_seconds()) // 60)
+        # In-only with no out: do not invent an early leave; late alone decides.
+        # Out-only with no in: early alone decides.
+        status, grace = sop_status(late, early, shift_minutes)
+        return HourResult(None, 0, None, status, invalid, True, grace)
 
     merged = merge_intervals(intervals)
     elapsed_seconds = sum(int((end - start).total_seconds()) for start, end in merged)
     elapsed_minutes = elapsed_seconds // 60
     starts = [start for start, _end in merged] + points
     ends = [end for _start, end in merged] + points
-    shift_minutes = 540
-    if schedule_start and schedule_end:
-        shift_minutes = max(0, _clock_minutes(schedule_start, schedule_end))
+    if lone_in:
+        starts.extend(datetime.combine(day, punch) for punch in lone_in)
+        missing = True
+    if lone_out:
+        ends.extend(datetime.combine(day, punch) for punch in lone_out)
+        missing = True
     if schedule_start is None or schedule_end is None:
         status, grace = "full_day", False
     else:
@@ -633,10 +656,10 @@ def _category_set(record: dict) -> set[str]:
 
 
 def _portal_credit(record: dict) -> Optional[tuple[str, float]]:
-    """Classroom percentage only. Present, Half day, and Absent are the classroom marks.
+    """Fallback classroom mark from stored portal-style categories.
 
-    RF is residential and OJT is on-the-job. Neither adds a classroom day. A portal
-    Present mark still counts when RF or OJT is listed on the same date.
+    Used only when SOP hours have not produced a calculated status yet.
+    RF / OJT alone never count as a classroom present day.
     """
     official = record.get("official_status") or ""
     marks = _category_set(record)
@@ -656,11 +679,9 @@ def _portal_credit(record: dict) -> Optional[tuple[str, float]]:
 
 
 def _credit(record: Optional[dict]) -> tuple[str, Optional[float]]:
+    """Day credit follows DDU-GKY SOP hours (calculated_status), not portal overrides."""
     if not record:
         return "absent", 0.0
-    portal = _portal_credit(record)
-    if portal is not None:
-        return portal
     status = record.get("calculated_status") or ""
     if status == "full_day" and _unearned_full_day(record):
         return "incomplete", None
@@ -674,6 +695,10 @@ def _credit(record: Optional[dict]) -> tuple[str, Optional[float]]:
         return "insufficient", 0.0
     if status == "incomplete":
         return "incomplete", None
+    # No SOP status yet — fall back to stored present/half/absent categories.
+    portal = _portal_credit(record)
+    if portal is not None:
+        return portal
     return "absent", 0.0
 
 

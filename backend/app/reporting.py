@@ -927,9 +927,8 @@ def candidate_export_sheets(conn: sqlite3.Connection) -> list[tuple[str, list[di
     for row in stats:
         summary.append(
             {
-                "Candidate Id": row["candidate_id"],
+                "KP Id": row["candidate_id"],
                 "Candidate Name": row["name"],
-                "Attendance Id": row.get("attendance_id") or "",
                 "Batch": row.get("batch_registration_number") or "",
                 "Status": row.get("candidate_status") or "",
                 "Enrollment Date": row.get("enrollment_date") or "",
@@ -966,7 +965,7 @@ def matrix_export_rows(conn: sqlite3.Connection) -> list[dict]:
     rows = []
     for item in payload["rows"]:
         line = {
-            "Candidate Id": item["candidate_id"],
+            "KP Id": item["candidate_id"],
             "Candidate Name": item["name"],
         }
         for column in payload["dates"]:
@@ -986,7 +985,7 @@ def low_attendance_rows(conn: sqlite3.Connection) -> list[dict]:
             continue
         rows.append(
             {
-                "Candidate Id": item["candidate_id"],
+                "KP Id": item["candidate_id"],
                 "Candidate Name": item["name"],
                 "Attendance %": item["verified_percent"],
                 "Full Days": item["full_days"],
@@ -1001,7 +1000,7 @@ def low_attendance_rows(conn: sqlite3.Connection) -> list[dict]:
 
 def _export_line(candidate: dict, day: date, record: dict | None, cell: dict, summary: dict) -> dict:
     return {
-        "Candidate Id": candidate["candidate_id"],
+        "KP Id": candidate["candidate_id"],
         "Candidate Name": candidate["name"],
         "Date": day.isoformat(),
         "In Time": (record or {}).get("in_time") or "",

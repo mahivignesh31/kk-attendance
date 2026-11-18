@@ -19,13 +19,26 @@ export async function api(path, options = {}) {
   if (options.body && !(options.body instanceof FormData) && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const response = await fetch(apiUrl(path), { ...options, headers, credentials: "include" });
+  let response;
+  try {
+    response = await fetch(apiUrl(path), { ...options, headers, credentials: "include" });
+  } catch {
+    throw new Error("Cannot reach the API. Start the local backend on port 8000, then try again.");
+  }
   const type = response.headers.get("content-type") || "";
   if (!response.ok) {
     let message = response.statusText || "Request failed";
+    // Vite proxy returns plain "Internal Server Error" when backend is down.
+    if (response.status === 500 && message === "Internal Server Error" && !API_BASE) {
+      message = "Local API is not running on port 8000. Start the backend, then sign in again.";
+    }
     if (type.includes("json")) {
-      const data = await response.json();
-      if (typeof data.detail === "string") message = data.detail;
+      try {
+        const data = await response.json();
+        if (typeof data.detail === "string") message = data.detail;
+      } catch {
+        /* keep message */
+      }
     }
     const error = new Error(message);
     error.status = response.status;

@@ -1,6 +1,7 @@
-"""Build per-date attendance payloads from Candidate ID punch history.
+"""Build per-date attendance payloads from KP Id punch history.
 
-The Candidate ID report has In/Out times only (no Present/Half/Absent lists).
+The KP Id / Candidate ID report has In/Out times only (no Present/Half/Absent lists).
+Attendance Id is never used for matching.
 Classroom status is taken from local SOP hours, then stored as portal-style
 present / half_day / absent so classroom % stays consistent.
 """
@@ -20,7 +21,7 @@ STATUS_TO_CATEGORY = {
     "half_day": "half_day",
     "absent": "absent",
     "insufficient": "absent",
-    "incomplete": "present",  # single punch is a full day under SOP
+    "incomplete": "absent",
 }
 
 
@@ -182,9 +183,12 @@ def filter_dates(
 ) -> list[str]:
     from datetime import timedelta
 
-    from .calculator import parse_date
+    from .calculator import parse_date, today_ist
 
-    selected = sorted(dates)
+    # Never sync today — attendance for the current IST day is incomplete.
+    yesterday = (today_ist() - timedelta(days=1)).isoformat()
+
+    selected = sorted(day for day in dates if day <= yesterday)
     if mode == "range":
         # Cross-check one date or a range: include every calendar day in the
         # window, even when nobody punched (those days save as all-absent).
@@ -194,10 +198,15 @@ def filter_dates(
             if date_from:
                 selected = [day for day in selected if day >= date_from]
             if date_to:
-                selected = [day for day in selected if day <= date_to]
-            return selected
+                selected = [day for day in selected if day <= min(date_to, yesterday)]
+            return [day for day in selected if day <= yesterday]
         if end < start:
             start, end = end, start
+        last = parse_date(yesterday)
+        if last is not None and end > last:
+            end = last
+        if last is not None and start > last:
+            return []
         days: list[str] = []
         cursor = start
         while cursor <= end:

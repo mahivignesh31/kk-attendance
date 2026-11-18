@@ -16,6 +16,10 @@ HEADER_MAP = {
     "s no": "sr_no",
     "sno": "sr_no",
     "candidate id": "candidate_id",
+    "kp id": "candidate_id",
+    "kpid": "candidate_id",
+    "kaushal panjee id": "candidate_id",
+    "kaushal panjee id kpid": "candidate_id",
     "candidate name": "name",
     "attendance id": "attendance_id",
     "batch registration number": "batch_registration_number",
@@ -42,36 +46,29 @@ def import_workbook(path: Path, batch: Optional[dict] = None) -> dict:
     working = frame.rename(columns=renamed)
     missing = [name for name in ("candidate_id", "name") if name not in working.columns]
     if missing:
-        labels = {"candidate_id": "Candidate Id", "name": "Candidate Name"}
+        labels = {"candidate_id": "KP Id", "name": "Candidate Name"}
         raise ValueError("The workbook is missing required columns: " + ", ".join(labels[name] for name in missing))
 
     errors: list[str] = []
     warnings: list[str] = []
     prepared: list[dict] = []
     seen_ids: set[str] = set()
-    seen_attendance: dict[str, str] = {}
     for index, row in working.iterrows():
         candidate_id = clean_id(row.get("candidate_id"))
         name = clean_text(row.get("name"))
         line = int(index) + 2
         if not candidate_id:
-            errors.append(f"Row {line} has no Candidate Id and was skipped.")
+            errors.append(f"Row {line} has no KP Id and was skipped.")
             continue
         if not name:
             errors.append(f"Row {line} ({candidate_id}) has no Candidate Name and was skipped.")
             continue
         if candidate_id in seen_ids:
-            errors.append(f"Row {line} repeats Candidate Id {candidate_id} and was skipped.")
+            errors.append(f"Row {line} repeats KP Id {candidate_id} and was skipped.")
             continue
+        # Attendance Id is stored for display only — never used as a match key.
         attendance_id = clean_id(row.get("attendance_id")) if "attendance_id" in working.columns else ""
-        if attendance_id and attendance_id in seen_attendance:
-            errors.append(
-                f"Row {line} repeats Attendance Id {attendance_id}, already used by {seen_attendance[attendance_id]}."
-            )
-            continue
         seen_ids.add(candidate_id)
-        if attendance_id:
-            seen_attendance[attendance_id] = candidate_id
         sr_no = _optional_int(row.get("sr_no")) if "sr_no" in working.columns else None
         prepared.append(
             {
@@ -126,7 +123,7 @@ def import_workbook(path: Path, batch: Optional[dict] = None) -> dict:
                 ).fetchone()
                 if attendance_owner:
                     warnings.append(
-                        f"Attendance Id {item['attendance_id']} is also on {attendance_owner['candidate_id']}. {item['candidate_id']} was still stored by Candidate Id."
+                        f"Attendance Id {item['attendance_id']} is also on {attendance_owner['candidate_id']}. {item['candidate_id']} was still stored by KP Id."
                     )
                     item["attendance_id"] = None
             before = conn.execute("SELECT id FROM candidates WHERE candidate_id = ?", (item["candidate_id"],)).fetchone()

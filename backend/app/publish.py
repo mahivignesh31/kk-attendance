@@ -366,17 +366,18 @@ def _http_json(method: str, url: str, payload: Optional[dict] = None, cookie: st
         raise ValueError(f"Could not reach online API: {exc.reason}") from exc
 
 
-def publish_batch_to_online(conn, batch_code: str) -> dict:
+def publish_batch_to_online(conn, batch_code: str, *, cookie: str | None = None) -> dict:
     """Export from this DB and POST into the configured online Railway API."""
     payload = export_batch_attendance(conn, batch_code)
     base = online_api_url()
-    user, password = online_admin_credentials()
-    login = _http_json(
-        "POST",
-        f"{base}/api/auth/login",
-        {"username": user, "password": password},
-    )
-    cookie = login.get("_set_cookie")
+    if not cookie:
+        user, password = online_admin_credentials()
+        login = _http_json(
+            "POST",
+            f"{base}/api/auth/login",
+            {"username": user, "password": password},
+        )
+        cookie = login.get("_set_cookie")
     if not cookie:
         raise ValueError("Online admin login did not return a session cookie.")
     result = _http_json(
@@ -392,6 +393,95 @@ def publish_batch_to_online(conn, batch_code: str) -> dict:
         "dates": len(payload.get("dates") or []),
         "records": len(payload.get("records") or []),
         "online": result,
+        "cookie": cookie,
         "message": result.get("message")
         or f"Published {batch_code} to online centres ({base}).",
+    }
+
+
+def list_publish_queue(conn) -> list[dict]:
+    """Centres and batches in a fixed one-at-a-time order for admin sync/publish."""
+    rows = conn.execute(
+        """
+        SELECT
+            b.batch_code,
+            b.batch_start_date,
+            b.training_center,
+            b.centre_id,
+            c.name AS centre_name,
+            (
+                SELECT COUNT(*) FROM candidates x
+                WHERE x.batch_id = b.id OR x.batch_registration_number = b.batch_code
+            ) AS candidate_count,
+            (
+                SELECT COUNT(*) FROM attendance_records r WHERE r.batch_id = b.id
+            ) AS record_count
+        FROM batches b
+        LEFT JOIN training_centres c ON c.id = b.centre_id
+        ORDER BY COALESCE(c.name, b.training_center, ''), b.batch_code
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def publish_all_batches_to_online(conn) -> dict:
+    """Publish every local batch to online, one centre/batch at a time."""
+    queue = list_publish_queue(conn)
+    if not queue:
+        raise ValueError("No batches to publish. Create centres and batches first.")
+    base = online_api_url()
+    user, password = online_admin_credentials()
+    login = _http_json(
+        "POST",
+        f"{base}/api/auth/login",
+        {"username": user, "password": password},
+    )
+    cookie = login.get("_set_cookie")
+    if not cookie:
+        raise ValueError("Online admin login did not return a session cookie.")
+
+    results: list[dict] = []
+    failed: list[dict] = []
+    for item in queue:
+        code = item["batch_code"]
+        try:
+            published = publish_batch_to_online(conn, code, cookie=cookie)
+            if published.get("cookie"):
+                cookie = published["cookie"]
+            results.append(
+                {
+                    "batch_code": code,
+                    "centre_name": item.get("centre_name") or item.get("training_center"),
+                    "ok": True,
+                    "records": published.get("records"),
+                    "dates": published.get("dates"),
+                    "message": published.get("message"),
+                }
+            )
+        except ValueError as exc:
+            failed.append(
+                {
+                    "batch_code": code,
+                    "centre_name": item.get("centre_name") or item.get("training_center"),
+                    "ok": False,
+                    "message": str(exc),
+                }
+            )
+            logger.warning("Publish failed for %s: %s", code, exc)
+
+    ok_count = len(results)
+    fail_count = len(failed)
+    message = (
+        f"Published {ok_count} batch(es) to online centres one at a time."
+        + (f" {fail_count} failed." if fail_count else " All centres done.")
+    )
+    return {
+        "ok": fail_count == 0,
+        "online_api": base,
+        "published": results,
+        "failed": failed,
+        "batches_total": len(queue),
+        "batches_ok": ok_count,
+        "batches_failed": fail_count,
+        "message": message,
     }

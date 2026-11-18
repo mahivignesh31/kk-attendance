@@ -80,6 +80,101 @@ def test_sop_late_and_early_limits():
     assert hours("14:00", "18:00").calculated_status == "absent"
 
 
+@pytest.mark.parametrize(
+    "late,early,status,grace",
+    [
+        # 0–15 inclusive → Full day, no grace
+        (0, 0, "full_day", False),
+        (1, 0, "full_day", False),
+        (14, 0, "full_day", False),
+        (15, 0, "full_day", False),
+        (0, 1, "full_day", False),
+        (0, 14, "full_day", False),
+        (0, 15, "full_day", False),
+        (10, 15, "full_day", False),
+        (15, 15, "full_day", False),
+        # 16–60 inclusive → Full day + grace
+        (16, 0, "full_day", True),
+        (30, 0, "full_day", True),
+        (59, 0, "full_day", True),
+        (60, 0, "full_day", True),
+        (0, 16, "full_day", True),
+        (0, 45, "full_day", True),
+        (0, 60, "full_day", True),
+        (16, 10, "full_day", True),
+        (20, 40, "full_day", True),
+        # 61–240 inclusive → Half day
+        (61, 0, "half_day", False),
+        (90, 0, "half_day", False),
+        (120, 0, "half_day", False),
+        (180, 0, "half_day", False),
+        (239, 0, "half_day", False),
+        (240, 0, "half_day", False),
+        (0, 61, "half_day", False),
+        (0, 180, "half_day", False),
+        (0, 240, "half_day", False),
+        (60, 61, "half_day", False),
+        # > 4 hrs (241+) → Absent
+        (241, 0, "absent", False),
+        (300, 0, "absent", False),
+        (522, 0, "absent", False),
+        (0, 241, "absent", False),
+        (0, 300, "absent", False),
+        (100, 241, "absent", False),
+    ],
+)
+def test_sop_status_every_band_boundary(late, early, status, grace):
+    assert sop_status(late, early, 540) == (status, grace)
+
+
+@pytest.mark.parametrize(
+    "inn,out,status,grace",
+    [
+        # On time / early arrival
+        ("09:00", "18:00", "full_day", False),
+        ("08:45", "18:00", "full_day", False),
+        ("09:00", "18:10", "full_day", False),
+        # 0–15 late/early
+        ("09:15", "18:00", "full_day", False),
+        ("09:00", "17:45", "full_day", False),
+        ("09:15", "17:45", "full_day", False),
+        # 16–60 late/early
+        ("09:16", "18:00", "full_day", True),
+        ("10:00", "18:00", "full_day", True),
+        ("09:00", "17:44", "full_day", True),
+        ("09:00", "17:00", "full_day", True),
+        ("09:20", "17:40", "full_day", True),
+        # 61–240 late/early
+        ("10:01", "18:00", "half_day", False),
+        ("13:00", "18:00", "half_day", False),
+        ("09:00", "16:59", "half_day", False),
+        ("09:00", "14:00", "half_day", False),
+        ("10:30", "15:00", "half_day", False),
+        # > 4 hrs
+        ("13:01", "18:00", "absent", False),
+        ("14:00", "18:00", "absent", False),
+        ("09:00", "13:59", "absent", False),
+        ("09:00", "12:00", "absent", False),
+        # One punch — late/early still applies
+        ("09:00", None, "full_day", False),
+        ("09:15", None, "full_day", False),
+        ("09:16", None, "full_day", True),
+        ("10:00", None, "full_day", True),
+        ("10:01", None, "half_day", False),
+        ("13:00", None, "half_day", False),
+        ("13:01", None, "absent", False),
+        ("17:42:23", None, "absent", False),
+        ("08:37:13", "00:00:00", "full_day", False),
+        ("10:30", "00:00:00", "half_day", False),
+        ("14:00", "00:00:00", "absent", False),
+    ],
+)
+def test_sop_clock_every_condition(inn, out, status, grace):
+    result = hours(inn, out)
+    assert result.calculated_status == status
+    assert result.grace_band is grace
+
+
 def test_overlapping_sessions_are_counted_once():
     merged = hours("09:00", "13:30", ("13:00", "18:00"))
     assert (merged.elapsed_minutes, merged.lunch_deduction_minutes, merged.qualifying_minutes) == (540, 0, 540)
@@ -100,13 +195,22 @@ def test_the_third_grace_day_in_fifteen_days_becomes_a_half_day():
     assert grace_days_to_demote(flagged[:2]) == set()
 
 
-def test_one_punch_is_a_full_day():
+def test_one_punch_still_uses_late_early_sop():
+    # On-time single punch → Full day
     missing = hours("09:00", None)
     assert missing.calculated_status == "full_day"
     assert missing.missing_checkout is True
     assert missing.qualifying_minutes is None
     assert missing.grace_band is False
-    assert hours("09:00", None, ("10:00", None)).calculated_status == "full_day"
+    assert hours("09:05", None).calculated_status == "full_day"
+    assert hours("09:05", None).grace_band is False
+    # 20 min late, one punch → Full day + grace
+    assert hours("09:20", None).calculated_status == "full_day"
+    assert hours("09:20", None).grace_band is True
+    # 17:42 only (Battula-style) → > 4 hrs late → Absent
+    late_only = hours("17:42:23", None)
+    assert late_only.calculated_status == "absent"
+    assert late_only.missing_checkout is True
     midnight_out = hours("08:37:13", "00:00:00")
     assert midnight_out.calculated_status == "full_day"
     assert midnight_out.missing_checkout is True
@@ -173,7 +277,8 @@ def test_a_day_with_no_attendance_mark_is_absent():
     assert totals.unverified_days == 0
 
 
-def test_portal_absence_lowers_the_percentage_even_when_hours_look_complete():
+def test_sop_hours_win_over_portal_absent_label():
+    """Classroom % follows SOP calculated_status, not a portal absent label."""
     friday = _friday()
     saturday = friday + timedelta(days=1)
     records = {
@@ -188,9 +293,9 @@ def test_portal_absence_lowers_the_percentage_even_when_hours_look_complete():
         enrollment=friday,
         removal=None,
     )
-    assert totals.full_days == 1
-    assert totals.absent_days == 1
-    assert totals.verified_percent == 50.0
+    assert totals.full_days == 2
+    assert totals.absent_days == 0
+    assert totals.verified_percent == 100.0
 
 
 def test_four_full_and_one_half_out_of_nine_days_is_50_percent():
@@ -235,7 +340,8 @@ def test_batch_percentage_uses_the_same_formula():
     assert weighted != plain_average
 
 
-def test_portal_present_is_reflected_even_when_the_sop_hours_are_short():
+def test_sop_absent_wins_over_portal_present_label():
+    """SOP calculated_status is the classroom mark; portal Present cannot override Absent."""
     day = date(2026, 11, 6)
     totals = summarize_candidate(
         [day],
@@ -245,9 +351,9 @@ def test_portal_present_is_reflected_even_when_the_sop_hours_are_short():
         enrollment=day,
         removal=None,
     )
-    assert totals.full_days == 1
-    assert totals.absent_days == 0
-    assert totals.verified_percent == 100.0
+    assert totals.full_days == 0
+    assert totals.absent_days == 1
+    assert totals.verified_percent == 0.0
     mixed = summarize_candidate(
         [day],
         {day: {"calculated_status": "half_day", "official_status": "mixed", "official_categories": ["present", "rf"]}},
@@ -256,8 +362,9 @@ def test_portal_present_is_reflected_even_when_the_sop_hours_are_short():
         enrollment=day,
         removal=None,
     )
-    assert mixed.full_days == 1
-    assert mixed.verified_percent == 100.0
+    assert mixed.half_days == 1
+    assert mixed.full_days == 0
+    assert mixed.verified_percent == 50.0
     residential = summarize_candidate(
         [day],
         {day: {"calculated_status": "full_day", "official_status": "rf", "official_categories": ["rf"], "qualifying_minutes": 480}},
@@ -266,9 +373,10 @@ def test_portal_present_is_reflected_even_when_the_sop_hours_are_short():
         enrollment=day,
         removal=None,
     )
-    assert residential.full_days == 0
-    assert residential.absent_days == 1
-    assert residential.verified_percent == 0.0
+    # SOP hours win: RF label does not wipe a full-day punch day.
+    assert residential.full_days == 1
+    assert residential.absent_days == 0
+    assert residential.verified_percent == 100.0
     on_job = summarize_candidate(
         [day],
         {day: {"calculated_status": "full_day", "official_status": "ojt", "official_categories": ["ojt"], "qualifying_minutes": 480}},
@@ -277,16 +385,16 @@ def test_portal_present_is_reflected_even_when_the_sop_hours_are_short():
         enrollment=day,
         removal=None,
     )
-    assert on_job.full_days == 0
-    assert on_job.absent_days == 1
-    assert on_job.verified_percent == 0.0
+    assert on_job.full_days == 1
+    assert on_job.absent_days == 0
+    assert on_job.verified_percent == 100.0
 
 
-def test_official_present_counts_when_the_checkout_is_missing():
+def test_single_punch_or_midnight_out_is_full_day_under_sop():
     day = date(2026, 11, 6)
     totals = summarize_candidate(
         [day],
-        {day: {"calculated_status": "incomplete", "official_status": "present", "in_time": "08:37:13", "out_time": "00:00:00"}},
+        {day: {"calculated_status": "full_day", "official_status": "present", "in_time": "08:37:13", "out_time": "00:00:00"}},
         today=day + timedelta(days=1),
         rules=RULES,
         enrollment=day,

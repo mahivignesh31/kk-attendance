@@ -34,8 +34,7 @@ export default function CandidateProfile() {
           </div>
         </div>
         <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Info label="Candidate Id" value={person.candidate_id} />
-          <Info label="Attendance Id" value={person.attendance_id || "—"} />
+          <Info label="KP Id" value={person.candidate_id} />
           <Info label="Enrollment date" value={longDate(person.enrollment_date)} />
           <Info label="OJT start date" value={longDate(person.ojt_start_date)} />
           <Info label="Full days" value={person.full_days} />
