@@ -47,6 +47,7 @@ export default function CellDialog({ candidatePk, date, onClose }) {
             <Field label="Qualifying hours" value={record?.qualifying_label || "—"} />
             <Field label="Official portal status" value={record?.official_label || "No portal row"} />
             <Field label="Calculated dashboard status" value={record?.calculated_label || meta.label} />
+            <Field label="Grace occasion" value={data.cell?.grace ? "Yes (16–60 min late/early)" : "No"} />
             <Field label="Data source" value={record?.data_source || "No portal record"} />
             <Field label="Last synced" value={stamp(record?.last_synced_at)} />
             <Field label="Device" value={record?.device_type || "—"} />

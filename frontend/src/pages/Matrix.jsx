@@ -37,8 +37,15 @@ export default function Matrix() {
       </div>
       <div className="flex flex-wrap gap-3 text-xs text-slate-600">
         {LEGEND.map((status) => (
-          <span key={status} className="inline-flex items-center gap-2"><StatusMark status={status} /></span>
+          <span key={status} className="inline-flex items-center gap-2">
+            <StatusMark status={status} />
+            <span>{status === "full_day" ? "Present" : status === "half_day" ? "Half day" : status === "absent" ? "Absent" : status === "incomplete" ? "Incomplete" : "N/A"}</span>
+          </span>
         ))}
+        <span className="inline-flex items-center gap-2">
+          <StatusMark status="full_day" grace />
+          <span>Present · grace</span>
+        </span>
       </div>
       {data.dates.length === 0 ? (
         <div className="rounded-2xl bg-white p-6 shadow-card">
@@ -75,7 +82,7 @@ export default function Matrix() {
                     const item = row.cells[column.date];
                     return (
                       <td key={column.date} className="border-b border-plum-50 px-2 py-2 text-center">
-                        <StatusMark status={item.status} warning={item.warning} onClick={() => setCell({ id: row.id, date: column.date })} />
+                        <StatusMark status={item.status} warning={item.warning} grace={item.grace} onClick={() => setCell({ id: row.id, date: column.date })} />
                       </td>
                     );
                   })}

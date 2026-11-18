@@ -724,6 +724,38 @@ def score_working_day(
     return {"include": True, "status": status, "credit": credit}
 
 
+def grace_occasion_from_record(record: Optional[dict], rules: dict) -> bool:
+    """True when the stored day is still Full day and late/early is in the 16–60 min grace band."""
+    if not record or (record.get("calculated_status") or "") != "full_day":
+        return False
+    schedule_start, _ = parse_clock(rules.get("training_start") or "09:00")
+    schedule_end, _ = parse_clock(rules.get("training_end") or "18:00")
+    if schedule_start is None or schedule_end is None:
+        return False
+    in_clock, _ = parse_clock(record.get("in_time"))
+    out_clock, _ = parse_clock(record.get("out_time"))
+    # Midnight out is treated as missing checkout (late-only), same as calculate_hours.
+    if out_clock == time(0, 0):
+        out_clock = None
+    late = 0
+    early = 0
+    if in_clock is not None:
+        late = max(
+            0,
+            (in_clock.hour * 60 + in_clock.minute) - (schedule_start.hour * 60 + schedule_start.minute),
+        )
+    if out_clock is not None:
+        early = max(
+            0,
+            (schedule_end.hour * 60 + schedule_end.minute) - (out_clock.hour * 60 + out_clock.minute),
+        )
+    if in_clock is None and out_clock is None:
+        return False
+    shift_minutes = max(0, _clock_minutes(schedule_start, schedule_end))
+    _status, grace = sop_status(late, early, shift_minutes or 540)
+    return bool(grace)
+
+
 def cell_status(
     day: date,
     record: Optional[dict],
@@ -734,7 +766,6 @@ def cell_status(
     removal: Optional[date],
     batch_end: Optional[date] = None,
 ) -> dict:
-    del rules
     outcome = score_working_day(
         day,
         record,
@@ -754,6 +785,7 @@ def cell_status(
         "official_label": OFFICIAL_LABELS.get((record or {}).get("official_status") or "", None),
         "qualifying_minutes": (record or {}).get("qualifying_minutes"),
         "has_record": record is not None,
+        "grace": grace_occasion_from_record(record, rules),
         "warning": bool(
             record
             and record.get("official_status") not in (None, "", "unknown")

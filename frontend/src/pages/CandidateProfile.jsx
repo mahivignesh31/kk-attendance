@@ -81,7 +81,7 @@ export default function CandidateProfile() {
                 {data.timeline.map((row) => (
                   <tr key={row.date} className="border-t border-plum-50">
                     <td className="py-2">{longDate(row.date)}</td>
-                    <td className="py-2"><StatusMark status={row.status} warning={row.warning} onClick={() => setCell(row.date)} /></td>
+                    <td className="py-2"><StatusMark status={row.status} warning={row.warning} grace={row.grace} onClick={() => setCell(row.date)} /></td>
                     <td className="py-2">{row.in_time || "—"}</td>
                     <td className="py-2">{row.out_time || "—"}</td>
                     <td className="py-2">{row.qualifying_label || "—"}</td>
