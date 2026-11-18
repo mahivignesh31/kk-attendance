@@ -450,30 +450,6 @@ def total_training_days(start: Optional[date], today: date, end: Optional[date] 
     return [day for day in days if day.weekday() != 6 and day not in EXCLUDED_TRAINING_DAYS]
 
 
-def upcoming_training_days(
-    today: date,
-    end: Optional[date] = None,
-    *,
-    horizon_days: int = 14,
-) -> list[date]:
-    """Upcoming working days after today, when the batch is still running.
-
-    Uses the batch expected end when set and still in the future; otherwise the
-    next ``horizon_days`` calendar days. Sundays and excluded holidays are skipped.
-    """
-    first = today + timedelta(days=1)
-    if end is not None and end < first:
-        return []
-    if end is not None and end >= first:
-        last = end
-    else:
-        last = today + timedelta(days=horizon_days)
-    if last < first:
-        return []
-    days = [first + timedelta(days=offset) for offset in range((last - first).days + 1)]
-    return [day for day in days if day.weekday() != 6 and day not in EXCLUDED_TRAINING_DAYS]
-
-
 def calculate_attendance(full_days: float, half_days: float, total_working_days: float) -> float:
     """Attendance % = ((full days + half days × 0.5) / total working days) × 100.
 

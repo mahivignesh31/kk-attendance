@@ -5,7 +5,7 @@ import { percent } from "../utils";
 import StatusMark from "../components/StatusMark";
 import CellDialog from "../components/CellDialog";
 
-const LEGEND = ["full_day", "half_day", "absent", "incomplete", "not_verified", "future"];
+const LEGEND = ["full_day", "half_day", "absent", "incomplete", "not_verified"];
 
 export default function Matrix() {
   const [data, setData] = useState(null);
@@ -31,7 +31,7 @@ export default function Matrix() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Candidate attendance matrix</h1>
-          <p className="mt-1 text-sm text-slate-500">{data.candidate_count} candidates · {data.dates.length} dates (includes upcoming working days when applicable). Click a cell for the check-in record.</p>
+          <p className="mt-1 text-sm text-slate-500">{data.candidate_count} candidates · {data.dates.length} portal dates. Click a cell for the check-in record.</p>
         </div>
         <input className="rounded-xl border border-plum-100 bg-white px-3 py-2 text-sm" placeholder="Search name or id" value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
@@ -39,7 +39,7 @@ export default function Matrix() {
         {LEGEND.map((status) => (
           <span key={status} className="inline-flex items-center gap-2">
             <StatusMark status={status} />
-            <span>{status === "full_day" ? "Present" : status === "half_day" ? "Half day" : status === "absent" ? "Absent" : status === "incomplete" ? "Incomplete" : status === "future" ? "Upcoming" : "N/A"}</span>
+            <span>{status === "full_day" ? "Present" : status === "half_day" ? "Half day" : status === "absent" ? "Absent" : status === "incomplete" ? "Incomplete" : "N/A"}</span>
           </span>
         ))}
         <span className="inline-flex items-center gap-2">
@@ -63,9 +63,9 @@ export default function Matrix() {
               <tr>
                 <th className="sticky-col border-b border-plum-100 px-4 py-3 text-left font-medium">Candidate</th>
                 {data.dates.map((column) => (
-                  <th key={column.date} className={`border-b border-plum-100 px-2 py-3 text-center font-medium ${column.sunday || column.upcoming ? "text-slate-400" : ""}`}>
+                  <th key={column.date} className={`border-b border-plum-100 px-2 py-3 text-center font-medium ${column.sunday ? "text-slate-400" : ""}`}>
                     <div>{column.label}</div>
-                    <div className="text-[11px] font-normal text-slate-400">{column.upcoming ? "Upcoming" : column.weekday}</div>
+                    <div className="text-[11px] font-normal text-slate-400">{column.weekday}</div>
                   </th>
                 ))}
                 <th className="border-b border-plum-100 px-3 py-3 text-right font-medium">Classroom %</th>

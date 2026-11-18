@@ -19,7 +19,6 @@ from .calculator import (
     sop_limits,
     hours_decimal,
     total_training_days,
-    upcoming_training_days,
     now_iso,
     parse_clock,
     parse_date,
@@ -434,10 +433,7 @@ def matrix(conn: sqlite3.Connection, date_from: str | None = None, date_to: str 
     end = parse_date(date_to)
     by_date = {row["attendance_date"]: row for row in context["dates"]}
     # No synced attendance yet (or after a full wipe): do not invent Absent from the calendar.
-    # Still show upcoming working days when the batch is running so centres can see what is next.
-    past_or_today = _total_days(context) if context["records"] or context["dates"] else []
-    upcoming = upcoming_training_days(context["today"], _batch_end(context))
-    source_days = sorted(set(past_or_today + upcoming))
+    source_days = _total_days(context) if context["records"] or context["dates"] else []
     days = []
     for day in source_days:
         if start and day < start:
@@ -483,7 +479,6 @@ def matrix(conn: sqlite3.Connection, date_from: str | None = None, date_to: str 
                 "label": day.strftime("%d %b"),
                 "weekday": day.strftime("%a"),
                 "sunday": day.weekday() == 6,
-                "upcoming": day > context["today"],
                 "detail_synced": bool(row.get("detail_synced")),
                 "present": row.get("present_count"),
                 "half_day": row.get("half_day_count"),
@@ -506,8 +501,7 @@ def candidate_profile(conn: sqlite3.Connection, candidate_pk: int) -> dict | Non
     indexed = _records_index(context["records"])
     timeline = []
     monthly: dict[str, dict] = {}
-    profile_days = sorted(set(_total_days(context) + upcoming_training_days(context["today"], _batch_end(context))))
-    for day in profile_days:
+    for day in _total_days(context):
         record = indexed.get((int(candidate_pk), day))
         cell = cell_status(
             day,
