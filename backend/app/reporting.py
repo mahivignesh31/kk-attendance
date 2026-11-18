@@ -432,8 +432,10 @@ def matrix(conn: sqlite3.Connection, date_from: str | None = None, date_to: str 
     start = parse_date(date_from)
     end = parse_date(date_to)
     by_date = {row["attendance_date"]: row for row in context["dates"]}
+    # No synced attendance yet (or after a full wipe): do not invent Absent from the calendar.
+    source_days = _total_days(context) if context["records"] or context["dates"] else []
     days = []
-    for day in _total_days(context):
+    for day in source_days:
         if start and day < start:
             continue
         if end and day > end:
