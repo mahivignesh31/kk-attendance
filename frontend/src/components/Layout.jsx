@@ -99,7 +99,9 @@ export default function Layout({ onSignedOut }) {
           <div className="grid h-11 w-11 place-items-center rounded-2xl bg-plum-700 font-semibold text-white">KK</div>
           <div>
             <div className="font-semibold leading-tight">Attendance monitor</div>
-            <div className="text-xs text-slate-500">KKERS · Ongole</div>
+            <div className="text-xs text-slate-500">
+              {boot?.user?.centre_name || boot?.active_centre?.name || boot?.batch?.training_center || (centreLogin ? "Training centre" : "All centres")}
+            </div>
           </div>
         </div>
         <div className="mx-5 h-px bg-gradient-to-r from-gold to-transparent" />
