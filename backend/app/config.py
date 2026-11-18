@@ -14,8 +14,13 @@ LOG_PATH = DATA_DIR / "sync.log"
 
 
 def browser_profile_dir() -> Path:
+    """Persistent Chrome profile so Kaushal login often survives between syncs."""
     override = os.environ.get("ATTENDANCE_BROWSER_PROFILE")
-    return Path(override) if override else (DATA_DIR / "browser-profile")
+    if override:
+        return Path(override)
+    if os.name == "posix" and (Path.home() / "Library" / "Application Support").is_dir():
+        return Path.home() / "Library" / "Application Support" / "kk-attendance-chrome"
+    return DATA_DIR / "browser-profile"
 
 
 # Kept as a Path for callers that import BROWSER_PROFILE directly.

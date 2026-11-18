@@ -20,10 +20,40 @@ export default function Layout({ onSignedOut }) {
   useEffect(() => {
     let active = true;
     const load = () => {
-      api("/api/bootstrap")
-        .then((data) => {
+      Promise.all([
+        api("/api/bootstrap"),
+        api("/api/centres").catch(() => ({ centres: [] })),
+      ])
+        .then(async ([data, centrePayload]) => {
           if (!active) return;
-          setBoot(data);
+          const fromBoot = data.centres || [];
+          const fromList = centrePayload.centres || [];
+          const byId = new Map();
+          [...fromBoot, ...fromList].forEach((row) => {
+            if (row?.id == null) return;
+            byId.set(Number(row.id), { id: row.id, name: row.name, code: row.code });
+          });
+          const centres = Array.from(byId.values()).sort((a, b) =>
+            String(a.name).localeCompare(String(b.name))
+          );
+          let next = { ...data, centres };
+          if (data.active_centre_id == null && centres.length) {
+            const pick =
+              centres.find((c) => c.name === (data.active_centre?.name || data.batch?.training_center)) ||
+              centres[0];
+            try {
+              const activated = await api("/api/centres/activate", {
+                method: "POST",
+                body: JSON.stringify({ centre_id: Number(pick.id) }),
+              });
+              const refreshed = await api("/api/bootstrap");
+              next = { ...refreshed, centres, active_centre_id: pick.id, active_centre: activated.centre };
+            } catch {
+              /* keep bootstrap payload */
+            }
+          }
+          if (!active) return;
+          setBoot(next);
           setOffline(false);
         })
         .catch((err) => {
@@ -42,6 +72,21 @@ export default function Layout({ onSignedOut }) {
 
   const running = ["running", "awaiting_login", "cancelling"].includes(boot?.sync?.status);
   const centreLogin = boot?.user?.role === "centre";
+  const centreOptions = boot?.centres || [];
+  const headerCentreId = (() => {
+    if (
+      boot?.active_centre_id != null &&
+      centreOptions.some((c) => String(c.id) === String(boot.active_centre_id))
+    ) {
+      return String(boot.active_centre_id);
+    }
+    const byName = centreOptions.find(
+      (c) => c.name === boot?.active_centre?.name || c.name === boot?.batch?.training_center
+    );
+    if (byName) return String(byName.id);
+    return centreOptions[0] ? String(centreOptions[0].id) : "";
+  })();
+  const headerBatches = boot?.batches || [];
   // Centres view reports only — no Settings, Centres admin list, or Sync.
   const links = centreLogin
     ? LINKS.filter(([to]) => to !== "/settings" && to !== "/centres" && to !== "/sync")
@@ -92,18 +137,34 @@ export default function Layout({ onSignedOut }) {
                   <label className="block text-xs text-slate-500">
                     Training centre
                     <select
+                      name="kk-header-training-centre"
+                      autoComplete="off"
                       className="mt-1 block min-w-[10rem] rounded-lg border border-plum-100 bg-white px-2 py-1 text-sm font-semibold text-ink"
-                      value={boot?.active_centre_id || ""}
+                      value={headerCentreId}
                       onChange={async (event) => {
                         const id = event.target.value;
                         if (!id) return;
-                        await api("/api/centres/activate", { method: "POST", body: JSON.stringify({ centre_id: Number(id) }) });
-                        setBoot(await api("/api/bootstrap"));
+                        await api("/api/centres/activate", {
+                          method: "POST",
+                          body: JSON.stringify({ centre_id: Number(id) }),
+                        });
+                        const data = await api("/api/bootstrap");
+                        const centrePayload = await api("/api/centres").catch(() => ({ centres: data.centres || [] }));
+                        const byId = new Map();
+                        [...(data.centres || []), ...(centrePayload.centres || [])].forEach((row) => {
+                          if (row?.id == null) return;
+                          byId.set(Number(row.id), { id: row.id, name: row.name, code: row.code });
+                        });
+                        setBoot({
+                          ...data,
+                          centres: Array.from(byId.values()).sort((a, b) =>
+                            String(a.name).localeCompare(String(b.name))
+                          ),
+                        });
                       }}
                     >
-                      {(boot?.centres || []).length === 0 && <option value="">No centre yet</option>}
                       {(boot?.centres || []).map((centre) => (
-                        <option key={centre.id} value={centre.id}>
+                        <option key={centre.id} value={String(centre.id)}>
                           {centre.name}
                         </option>
                       ))}
@@ -119,11 +180,12 @@ export default function Layout({ onSignedOut }) {
                       const code = event.target.value;
                       if (!code) return;
                       await api("/api/batches/activate", { method: "POST", body: JSON.stringify({ batch_code: code }) });
-                      setBoot(await api("/api/bootstrap"));
+                      const data = await api("/api/bootstrap");
+                      setBoot({ ...data, centres: boot?.centres || data.centres || [] });
                     }}
                   >
-                    {(boot?.batches || []).length === 0 && <option value="">No batch yet</option>}
-                    {(boot?.batches || []).map((batch) => (
+                    {headerBatches.length === 0 && <option value="">No batch yet</option>}
+                    {headerBatches.map((batch) => (
                       <option key={batch.batch_code} value={batch.batch_code}>
                         {batch.batch_code} · {batch.candidate_count} candidates
                       </option>
@@ -135,9 +197,15 @@ export default function Layout({ onSignedOut }) {
           </div>
           <div className="flex items-center gap-2">
             {!centreLogin && (
-              <Link to="/sync" className="inline-flex items-center gap-2 rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white hover:bg-plum-800">
-                <RefreshCw size={16} className={running ? "animate-spin" : ""} />
-                {running ? "Sync in progress" : "Sync portal"}
+              <Link
+                to="/sync"
+                title={running ? boot?.sync?.message || "Sync in progress" : "Sync portal"}
+                className="inline-flex max-w-[min(28rem,55vw)] items-center gap-2 rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white hover:bg-plum-800"
+              >
+                <RefreshCw size={16} className={running ? "animate-spin shrink-0" : "shrink-0"} />
+                <span className="truncate">
+                  {running ? boot?.sync?.message || "Sync in progress" : "Sync portal"}
+                </span>
               </Link>
             )}
             {centreLogin && (

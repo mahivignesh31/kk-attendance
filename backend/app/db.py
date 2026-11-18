@@ -340,6 +340,8 @@ def upsert_batch(conn: sqlite3.Connection, batch: dict) -> int:
 
 
 def mark_interrupted_syncs() -> None:
+    # Only clear stale jobs. Fresh syncs (<90s) are left alone so a racing
+    # uvicorn/keepalive startup cannot abort an in-progress Chromium sync.
     with transaction() as conn:
         conn.execute(
             """
@@ -348,6 +350,8 @@ def mark_interrupted_syncs() -> None:
                 finished_at = ?,
                 message = 'The server stopped before this sync finished. Start it again to continue.'
             WHERE status IN ('running', 'awaiting_login', 'cancelling')
+              AND started_at IS NOT NULL
+              AND started_at < datetime('now', '-90 seconds')
             """,
             (now_iso(),),
         )

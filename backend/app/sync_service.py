@@ -79,7 +79,20 @@ class SyncManager:
     def _browser_loop(self) -> None:
         """Playwright can only be used on the thread that started it. This thread never exits."""
         while True:
-            sync_id, mode, date_from, date_to, batch_codes = self._jobs.get()
+            job = self._jobs.get()
+            if job and job[0] == "__open_live__":
+                try:
+                    from .config import PORTAL_CANDIDATE_DETAILS_URL
+
+                    self.portal.open_browser(force=True)
+                    try:
+                        self.portal._goto(PORTAL_CANDIDATE_DETAILS_URL)
+                    except Exception:
+                        logger.info("Chromium live window opened — sign into Kaushal if the report is not visible yet")
+                except Exception:
+                    logger.exception("Could not open the Chromium live window")
+                continue
+            sync_id, mode, date_from, date_to, batch_codes = job
             try:
                 self._run(sync_id, mode, date_from, date_to, batch_codes)
             except Exception:
@@ -88,9 +101,32 @@ class SyncManager:
                 with self._lock:
                     self._busy = False
 
+    def request_open_live_window(self) -> None:
+        """Queue Chromium open on the Playwright browser thread (never from a request thread)."""
+        self._jobs.put(("__open_live__", None, None, None, None))
+
     def cancel(self) -> None:
         self.cancel_event.set()
         self.login_event.set()
+        with transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM sync_history
+                WHERE status IN ('running', 'awaiting_login', 'cancelling')
+                ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE sync_history
+                    SET status = 'cancelling',
+                        progress_step = 'cancelling',
+                        message = 'Stopping sync…'
+                    WHERE id = ?
+                    """,
+                    (row["id"],),
+                )
 
     def notify_login(self) -> None:
         self.login_event.set()
@@ -242,7 +278,14 @@ class SyncManager:
                 records_saved=saved,
             )
         except SyncCancelled as exc:
-            self.update(sync_id, status="cancelled", finished_at=now_iso(), message=str(exc), records_saved=saved)
+            self.update(
+                sync_id,
+                status="cancelled",
+                finished_at=now_iso(),
+                progress_step="cancelled",
+                message=f"Sync stopped. Saved {saved} records before cancel.",
+                records_saved=saved,
+            )
         except Exception as exc:
             logger.exception("Sync %s failed", sync_id)
             message = _friendly_sync_error(exc)
@@ -252,7 +295,7 @@ class SyncManager:
                 status="failed",
                 finished_at=now_iso(),
                 progress_step="failed",
-                message=message,
+                message=f"Sync failed: {message}",
                 records_saved=saved,
             )
 
@@ -322,7 +365,7 @@ class SyncManager:
                 progress_step="extracting_records",
                 progress_current=index,
                 progress_total=total_candidates,
-                message=f"{batch_label}: reading {name} ({index} of {total_candidates})",
+                message=f"{batch_label} · reading {name} ({index} of {total_candidates})",
             )
             if not cid:
                 self.log(sync_id, f"{batch_label} · {name}: skipped — blank KP Id on the master list.")
@@ -380,9 +423,11 @@ class SyncManager:
         total = len(selected_dates)
         self.update(
             sync_id,
+            progress_step="reconciling",
+            progress_current=0,
             progress_total=total,
             status="running",
-            message=f"{batch_label}: calculating attendance",
+            message=f"{batch_label} · calculating attendance (0 of {total})",
         )
         if total == 0:
             self.log(
@@ -393,45 +438,60 @@ class SyncManager:
             )
             return saved, processed, len(discovered_dates), candidate_failures, failures
 
-        for index, day in enumerate(selected_dates, start=1):
+        # Fetch stays sequential on one Chrome page; parallelize only DB reconcile/save.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _save_one_day(day: str) -> tuple[str, int]:
             if self.cancel_event.is_set():
                 raise SyncCancelled("Sync cancelled by the administrator.")
-            self.update(
-                sync_id,
-                progress_step="processing_dates",
-                progress_current=index,
-                progress_total=total,
-                message=f"{batch_label}: date {index} of {total}",
+            attendance_day = parse_date(day)
+            if attendance_day is None:
+                raise PortalError(f"Unreadable attendance date {day}")
+            summary, result = reconcile_punch_date(
+                attendance_day=attendance_day,
+                day_punches=by_date.get(day, []),
+                candidates=candidates,
+                rules=rules,
             )
-            try:
-                attendance_day = parse_date(day)
-                if attendance_day is None:
-                    raise PortalError(f"Unreadable attendance date {day}")
-                self.update(sync_id, progress_step="reconciling", message=f"{batch_label}: calculating attendance")
-                summary, result = reconcile_punch_date(
-                    attendance_day=attendance_day,
-                    day_punches=by_date.get(day, []),
-                    candidates=candidates,
-                    rules=rules,
+            with transaction() as conn:
+                _upsert_summary(conn, batch_id, summary)
+                written = _persist_date(
+                    conn,
+                    batch_id,
+                    summary,
+                    result,
+                    sync_id,
+                    replace=mode in {"full", "range"},
                 )
-                with transaction() as conn:
-                    _upsert_summary(conn, batch_id, summary)
-                    written = _persist_date(
-                        conn,
-                        batch_id,
-                        summary,
-                        result,
-                        sync_id,
-                        replace=mode in {"full", "range"},
-                    )
-                saved += written
-                processed += 1
-            except SyncCancelled:
-                raise
-            except Exception as exc:
-                failures += 1
-                self.log(sync_id, f"{batch_label} · {day}: {exc}")
-                logger.exception("Date %s failed", day)
+            return day, written
+
+        workers = min(4, total)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_save_one_day, day): day for day in selected_dates}
+            for future in as_completed(futures):
+                if self.cancel_event.is_set():
+                    for pending in futures:
+                        pending.cancel()
+                    raise SyncCancelled("Sync cancelled by the administrator.")
+                day = futures[future]
+                try:
+                    _, written = future.result()
+                    saved += written
+                    processed += 1
+                except SyncCancelled:
+                    raise
+                except Exception as exc:
+                    failures += 1
+                    self.log(sync_id, f"{batch_label} · {day}: {exc}")
+                    logger.exception("Date %s failed", day)
+                self.update(
+                    sync_id,
+                    progress_step="saving",
+                    progress_current=processed + failures,
+                    progress_total=total,
+                    records_saved=saved,
+                    message=f"{batch_label} · saving dates ({processed + failures} of {total}) · saved {saved}",
+                )
         return saved, processed, len(discovered_dates), candidate_failures, failures
 
 

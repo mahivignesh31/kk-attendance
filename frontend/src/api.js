@@ -1,19 +1,29 @@
-// Production default: Railway API (so Git-imported Vercel builds work without env).
+// Hosted Vercel frontend talks to Railway. Local :8000 must stay same-origin.
 const DEFAULT_PROD_API = "https://kk-attendance-production.up.railway.app";
-const API_BASE = (
-  import.meta.env.VITE_API_URL ||
-  (import.meta.env.PROD ? DEFAULT_PROD_API : "")
-).replace(/\/$/, "");
+
+function resolveApiBase() {
+  // Admin Mac / local API — always same-origin, even if .env.production points at Railway.
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") return "";
+  }
+  const fromEnv = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+  if (fromEnv) return fromEnv;
+  if (import.meta.env.PROD) return DEFAULT_PROD_API;
+  return "";
+}
 
 export function apiUrl(path) {
-  if (!path) return API_BASE || "/";
+  const base = resolveApiBase();
+  if (!path) return base || "/";
   if (/^https?:\/\//i.test(path)) return path;
-  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 export async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (API_BASE.includes("ngrok")) {
+  const base = resolveApiBase();
+  if (base.includes("ngrok")) {
     headers["ngrok-skip-browser-warning"] = "1";
   }
   if (options.body && !(options.body instanceof FormData) && !headers["Content-Type"]) {
@@ -28,8 +38,7 @@ export async function api(path, options = {}) {
   const type = response.headers.get("content-type") || "";
   if (!response.ok) {
     let message = response.statusText || "Request failed";
-    // Vite proxy returns plain "Internal Server Error" when backend is down.
-    if (response.status === 500 && message === "Internal Server Error" && !API_BASE) {
+    if (response.status === 500 && message === "Internal Server Error" && !base) {
       message = "Local API is not running on port 8000. Start the backend, then sign in again.";
     }
     if (type.includes("json")) {

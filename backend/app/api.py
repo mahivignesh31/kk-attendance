@@ -183,6 +183,7 @@ def bootstrap():
         "open_issues": issues,
         "sync": dict(current) if current else None,
         "portal_url": PORTAL_REPORT_URL,
+        # Embedded noVNC panel only on remote-display hosts — never on local Mac.
         "remote_browser": remote_display_enabled(),
         "remote_browser_path": (
             "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"
@@ -714,17 +715,28 @@ def activate_centre(body: CentreActivate):
             current = get_json(conn, "batch") or {}
             current["training_center"] = centre["name"]
             set_json(conn, "batch", current)
+        batch_payload = []
+        for row in batch_rows:
+            count = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM candidates c
+                WHERE c.batch_id = ? OR c.batch_registration_number = ?
+                """,
+                (row["id"], row["batch_code"]),
+            ).fetchone()["count"]
+            batch_payload.append(
+                {
+                    "batch_code": row["batch_code"],
+                    "batch_start_date": row["batch_start_date"],
+                    "training_center": row["training_center"] or centre["name"],
+                    "centre_id": row["centre_id"],
+                    "candidate_count": count,
+                }
+            )
+        centre_payload = {"id": centre["id"], "name": centre["name"], "code": centre["code"]}
     return {
-        "centre": {"id": centre["id"], "name": centre["name"], "code": centre["code"]},
-        "batches": [
-            {
-                "batch_code": row["batch_code"],
-                "batch_start_date": row["batch_start_date"],
-                "training_center": row["training_center"],
-                "centre_id": row["centre_id"],
-            }
-            for row in batch_rows
-        ],
+        "centre": centre_payload,
+        "batches": batch_payload,
         "batch": current,
     }
 
@@ -957,16 +969,19 @@ def sync_login_done():
 
 @router.post("/sync/reopen-browser")
 def sync_reopen_browser():
-    """Reset the live Chromium to the Kaushal login page (clears stuck 401 tabs)."""
+    """Open / reset the Chromium live window on Candidate Attendance Report."""
     _require_admin()
-    from .config import remote_display_enabled
+    from .config import PORTAL_CANDIDATE_DETAILS_URL, remote_display_enabled
     from .live_browser import ensure_login_browser, stop
 
-    if not remote_display_enabled():
-        raise HTTPException(status_code=400, detail="Live browser is only available when remote display is enabled.")
-    stop()
-    ensure_login_browser(fresh=True)
-    return {"ok": True, "remote_browser_path": "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"}
+    if remote_display_enabled():
+        stop()
+        ensure_login_browser(PORTAL_CANDIDATE_DETAILS_URL, fresh=True)
+        return {"ok": True, "remote_browser_path": "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"}
+
+    # Playwright must open on the dedicated browser thread — never on the request thread.
+    manager.request_open_live_window()
+    return {"ok": True, "url": PORTAL_CANDIDATE_DETAILS_URL}
 
 
 @router.post("/sync/upload-excel")

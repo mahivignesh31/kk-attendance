@@ -155,59 +155,102 @@ class PortalClient:
         except Exception:
             return False
 
+    def _activate_local_browser(self) -> None:
+        """Bring the visible Chrome/Chromium window to the front on macOS."""
+        import subprocess
+
+        for app in ("Google Chrome", "Chromium"):
+            try:
+                subprocess.run(
+                    ["osascript", "-e", f'tell application "{app}" to activate'],
+                    check=False,
+                    capture_output=True,
+                    timeout=3,
+                )
+            except Exception:
+                pass
+
     def open_browser(self, force: bool = False) -> None:
-        """Online: attach to the live server Chrome. Local: user Chrome CDP or headed Playwright."""
+        """Online: remote CDP. Local: persistent Google Chrome on the sync browser thread only."""
         from .config import remote_display_enabled
 
         if remote_display_enabled():
             self._open_remote_cdp(force=force)
             return
         if self.alive() and not force:
-            return
-        if self._try_connect_user_chrome(force=force):
+            self._activate_local_browser()
             return
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise PortalError("Playwright is not installed. Run `python -m playwright install chromium`.") from exc
-        self._discard_browser()
+        try:
+            self._discard_browser()
+        except Exception:
+            self.context = None
+            self.page = None
+            self.main_page = None
+            self.playwright = None
+            self._cdp_browser = None
+            self._detail_popup = None
+            self._remote_mode = False
+        self.playwright = sync_playwright().start()
         profile = browser_profile_dir()
         profile.mkdir(parents=True, exist_ok=True)
         self._release_profile_lock()
-        self.playwright = sync_playwright().start()
-        try:
-            headless = os.environ.get("ATTENDANCE_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
-            launch_args = [
-                "--no-first-run",
-                "--no-default-browser-check",
+        headless = os.environ.get("ATTENDANCE_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
+        launch_kwargs = {
+            "user_data_dir": str(profile),
+            "channel": "chrome",
+            "headless": headless,
+            "locale": "en-IN",
+            "timezone_id": "Asia/Kolkata",
+            "viewport": {"width": 1440, "height": 900},
+            "accept_downloads": True,
+            "args": [
                 "--disable-dev-shm-usage",
                 "--window-size=1440,900",
                 "--window-position=0,0",
-            ]
-            self.context = self.playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile),
-                headless=headless,
-                locale="en-IN",
-                timezone_id="Asia/Kolkata",
-                viewport={"width": 1440, "height": 900},
-                accept_downloads=True,
-                args=launch_args,
-            )
-        except Exception as exc:
-            self._discard_browser()
-            raise PortalError(
-                "Could not open a browser. Close leftover Chromium, or run scripts/open-kaushal-chrome.sh, then try again."
-            ) from exc
-        self._remote_mode = False
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
-        self.main_page = self.page
-        self._detail_popup = None
-        self.page.set_default_timeout(20000)
-        self.page.set_default_navigation_timeout(60000)
+            ],
+        }
         try:
-            self.page.bring_to_front()
+            # Persistent profile keeps Kaushal login between syncs; channel=chrome is visible automated Chrome.
+            self.context = self.playwright.chromium.launch_persistent_context(**launch_kwargs)
+            self._cdp_browser = None
+            pages = [p for p in self.context.pages if not p.is_closed()]
+            self.page = pages[0] if pages else self.context.new_page()
+            self.main_page = self.page
+            self._detail_popup = None
+            self._remote_mode = False
+            self.page.set_default_timeout(20000)
+            self.page.set_default_navigation_timeout(60000)
+        except Exception as first_exc:
+            logger.info("Chrome persistent launch failed (%s); retrying once after unlocking profile", first_exc)
+            try:
+                self._release_profile_lock()
+                time.sleep(0.4)
+                self.context = self.playwright.chromium.launch_persistent_context(**launch_kwargs)
+                self._cdp_browser = None
+                pages = [p for p in self.context.pages if not p.is_closed()]
+                self.page = pages[0] if pages else self.context.new_page()
+                self.main_page = self.page
+                self._detail_popup = None
+                self._remote_mode = False
+                self.page.set_default_timeout(20000)
+                self.page.set_default_navigation_timeout(60000)
+            except Exception as exc:
+                try:
+                    self._discard_browser()
+                except Exception:
+                    pass
+                raise PortalError(
+                    "Could not open automated Google Chrome. Install Chrome and try sync again."
+                ) from exc
+        try:
+            self._goto(PORTAL_LOGIN_URL)
         except Exception:
-            logger.info("Could not bring the portal window to the front")
+            logger.info("Could not open Kaushal yet — Chrome is ready for manual login")
+        self._activate_local_browser()
 
     def _open_remote_cdp(self, force: bool = False) -> None:
         """Attach to the online live Chromium after the admin has logged in."""
@@ -396,15 +439,22 @@ class PortalClient:
                         "Kaushal login was not detected. Sign in fully in the live window, then click “I have logged in”."
                     )
         else:
-            self.manager.update(sync_id, progress_step="connecting", message="Connecting to Chrome")
+            # Local Mac: open persistent Chrome; auto-detect login (no button).
+            self.manager.update(
+                sync_id,
+                status="running",
+                progress_step="connecting",
+                message="Opening Chrome for Kaushal login",
+            )
             self.open_browser()
-            if not self._on_candidate_details():
-                self._goto(PORTAL_CANDIDATE_DETAILS_URL)
+            try:
+                self._goto(PORTAL_LOGIN_URL)
                 self._wait_for_app()
-            if self._login_form_visible() or not self._authenticated():
-                if not self._login_form_visible():
-                    self._goto(PORTAL_LOGIN_URL)
-                    self._wait_for_app()
+            except Exception:
+                logger.info("Could not open Kaushal login page yet")
+            if self._login_ready():
+                self.manager.update(sync_id, status="running", message="Loading Attendance Report")
+            else:
                 self._wait_for_manual_login()
         if not self._on_candidate_details():
             self._goto(PORTAL_CANDIDATE_DETAILS_URL)
@@ -418,7 +468,7 @@ class PortalClient:
         if not self._candidate_id_form_visible():
             self._shot("candidate-form-missing")
             raise PortalError(
-                "The Candidate ID attendance report form was not found. Open REPORT → CANDIDATE ATTENDANCE REPORT in the live window."
+                "The Candidate ID form was not found in Chromium. After login, open REPORT → CANDIDATE ATTENDANCE REPORT, then start sync again."
             )
         self.manager.update(
             sync_id,
@@ -691,6 +741,17 @@ class PortalClient:
         if not self._candidate_id_form_visible():
             raise PortalError("Lost the Candidate ID report page. Open it again and restart sync.")
 
+    def _login_ready(self) -> bool:
+        """True when Kaushal session is usable for Candidate ID sync."""
+        try:
+            if self._candidate_id_form_visible():
+                return True
+            if self._authenticated():
+                return True
+        except Exception:
+            return False
+        return False
+
     def _wait_for_manual_login(self) -> None:
         from .config import remote_display_enabled
 
@@ -699,20 +760,43 @@ class PortalClient:
             status="awaiting_login",
             progress_step="awaiting_login",
             message=(
-                "In the live window on this page: sign into Kaushal, then click “I have logged in”."
+                "Sign into Kaushal in the live window — sync continues automatically after login."
                 if remote_display_enabled()
-                else "In Google Chrome: sign into Kaushal, then click “I have logged in” here."
+                else "Sign into Kaushal in Chrome — sync continues automatically after login (no button needed)."
             ),
         )
+        self._activate_local_browser()
         deadline = time.time() + 20 * 60
+        last_nudge = 0.0
+        last_probe = 0.0
         while time.time() < deadline:
             self._check_cancel()
+            # Optional button still works, but is not required.
             if self.manager.login_event.is_set():
                 self.manager.login_event.clear()
-            if self._authenticated():
-                self.manager.update(self.sync_id, status="running", message="Loading Attendance Report")
-                return
-            self.page.wait_for_timeout(700)
+            now = time.time()
+            if now - last_nudge > 10:
+                self._activate_local_browser()
+                last_nudge = now
+            # Auto-detect login every ~2s without requiring a UI click.
+            if now - last_probe > 2:
+                last_probe = now
+                try:
+                    if not self.alive():
+                        self.open_browser(force=True)
+                    if self._login_ready():
+                        self.manager.update(self.sync_id, status="running", message="Loading Attendance Report")
+                        return
+                    # After login, portal often lands on home — open Candidate ID report.
+                    if self._authenticated() and not self._candidate_id_form_visible():
+                        self._goto(PORTAL_CANDIDATE_DETAILS_URL)
+                        self._wait_for_app()
+                        if self._login_ready():
+                            self.manager.update(self.sync_id, status="running", message="Loading Attendance Report")
+                            return
+                except Exception as exc:
+                    logger.info("Auto login probe: %s", exc)
+            time.sleep(0.5)
         raise PortalError("Login was not completed within 20 minutes. No attendance was changed on the portal.")
 
     def _wait_for_submitted_table(self) -> None:
@@ -749,11 +833,27 @@ class PortalClient:
         text = (info.get("text") or "").lower()
         if "login to your account" in text or "enter captcha" in text:
             return False
-        if any(token in text for token in ("logout", "sign out", "candidate attendance", "sanction order", "training center")):
-            return True
         href = (info.get("href") or "").lower()
-        if any(token in href for token in ("login", "signin", "sign-in")):
+        if any(token in href for token in ("login", "signin", "sign-in")) and "logout" not in text:
             return False
+        # Logged-in Kaushal shells expose report menus / user chrome, not the login form.
+        # Require clear post-login chrome — do not treat public landing/home as logged in.
+        if any(
+            token in text
+            for token in (
+                "logout",
+                "sign out",
+                "ddugky report",
+                "ddu-gky report",
+                "tracking candidate",
+                "monthly continuity",
+                "employer registration",
+                "expenditure report",
+            )
+        ):
+            return True
+        if "candidate attendance" in text and ("sanction order" in text or "training center" in text):
+            return True
         return False
 
     def _on_attendance_report(self) -> bool:
