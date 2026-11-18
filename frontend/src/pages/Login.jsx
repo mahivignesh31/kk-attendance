@@ -29,7 +29,7 @@ export default function Login({ onSuccess }) {
       <form onSubmit={submit} className="w-full max-w-md rounded-3xl bg-white p-8 shadow-card">
         <div className="grid h-12 w-12 place-items-center rounded-2xl bg-plum-700 font-semibold text-white">KK</div>
         <h1 className="mt-5 text-2xl font-semibold">Administrator login</h1>
-        <p className="mt-2 text-sm text-slate-500">Administrator or centre login. Example: username <span className="font-medium text-slate-700">kkerdsongole</span>, password <span className="font-medium text-slate-700">kkerdsongole@123</span>. A centre login shows only that centre.</p>
+        <p className="mt-2 text-sm text-slate-500">Administrator syncs attendance. Centre login (example <span className="font-medium text-slate-700">kkerdsongole</span> / <span className="font-medium text-slate-700">kkerdsongole@123</span>) only views that centre’s reports online.</p>
         {error && <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
         <label className="mt-5 block text-sm text-slate-600">
           Username

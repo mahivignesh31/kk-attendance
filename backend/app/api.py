@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -518,6 +518,45 @@ def recalculate_attendance():
     }
 
 
+class PublishBody(BaseModel):
+    batch_code: str | None = None
+
+
+@router.post("/admin/import-attendance")
+async def import_attendance_publish(request: Request):
+    """Online receiver: admin Mac publishes synced attendance here for centre reports."""
+    _require_admin()
+    from .publish import import_batch_attendance
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Published attendance payload must be a JSON object.")
+    try:
+        with transaction() as conn:
+            return import_batch_attendance(conn, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/admin/publish-online")
+def publish_attendance_online(body: PublishBody):
+    """Local admin: push the active (or named) batch attendance to the online Railway API."""
+    _require_admin()
+    from .publish import publish_batch_to_online
+    from .reporting import load_context
+
+    with read_conn() as conn:
+        context = load_context(conn)
+        code = (body.batch_code or (context.get("batch") or {}).get("batch_code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Select a batch before publishing to online.")
+    try:
+        with read_conn() as conn:
+            return publish_batch_to_online(conn, code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/centres/{centre_id}/batches")
 def create_centre_batch(centre_id: int, body: BatchBody):
     from .calculator import parse_date
@@ -697,13 +736,15 @@ def sync_history():
 
 @router.post("/sync/start")
 def sync_start(body: SyncBody):
+    _require_admin()
     if cloud_portal_sync_blocked():
         raise HTTPException(
             status_code=400,
             detail=(
-                "Portal sync uses your normal Chrome on this Mac. "
+                "Portal Chromium sync runs on the administrator Mac only. "
                 "Open http://127.0.0.1:8000 locally, run scripts/open-kaushal-chrome.sh, "
-                "sign into Kaushal, then start sync. This online site is for viewing reports."
+                "sign into Kaushal, sync, then Publish to online so centres can view reports. "
+                "Centre logins cannot sync — they only view online reports."
             ),
         )
     if body.mode not in {"incremental", "range", "full"}:
@@ -720,8 +761,6 @@ def sync_start(body: SyncBody):
         from .reporting import load_context
 
         batch_code = (load_context(conn)["batch"] or {}).get("batch_code") or None
-    if _user().get("role") == "centre" and not batch_code:
-        raise HTTPException(status_code=400, detail="Create a batch before syncing attendance.")
     try:
         sync_id = manager.start(body.mode, date_from, date_to, batch_code)
     except RuntimeError as exc:
@@ -731,12 +770,14 @@ def sync_start(body: SyncBody):
 
 @router.post("/sync/cancel")
 def sync_cancel():
+    _require_admin()
     manager.cancel()
     return {"ok": True}
 
 
 @router.post("/sync/login-done")
 def sync_login_done():
+    _require_admin()
     manager.notify_login()
     return {"ok": True}
 
@@ -744,11 +785,12 @@ def sync_login_done():
 @router.post("/sync/reopen-browser")
 def sync_reopen_browser():
     """Reset the live Chromium to the Kaushal login page (clears stuck 401 tabs)."""
+    _require_admin()
     from .config import remote_display_enabled
     from .live_browser import ensure_login_browser, stop
 
     if not remote_display_enabled():
-        raise HTTPException(status_code=400, detail="Live browser is only available on the online server.")
+        raise HTTPException(status_code=400, detail="Live browser is only available when remote display is enabled.")
     stop()
     ensure_login_browser(fresh=True)
     return {"ok": True, "remote_browser_path": "/novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&path=novnc/"}
@@ -761,7 +803,8 @@ async def sync_upload_excel(
     date_from: str | None = Form(None),
     date_to: str | None = Form(None),
 ):
-    """Import Candidate Attendance Report Excel files downloaded from Kaushal."""
+    """Admin-only emergency Excel import. Prefer local Chromium sync + publish online."""
+    _require_admin()
     from .excel_sync import import_punch_excels
     from .reporting import load_context
 
@@ -779,9 +822,6 @@ async def sync_upload_excel(
 
     with read_conn() as conn:
         batch_code = (load_context(conn)["batch"] or {}).get("batch_code") or None
-    if _user().get("role") == "centre" and not batch_code:
-        raise HTTPException(status_code=400, detail="Create a batch before uploading attendance.")
-
     saved_paths: list[Path] = []
     try:
         for upload in files:

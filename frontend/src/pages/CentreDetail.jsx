@@ -134,7 +134,9 @@ export default function CentreDetail() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button type="button" className="rounded-xl border border-plum-100 px-3 py-2 text-sm font-semibold" onClick={async () => { await api("/api/batches/activate", { method: "POST", body: JSON.stringify({ batch_code: batch.batch_code }) }); navigate("/candidates"); }}>View candidates</button>
               <button type="button" className="rounded-xl border border-plum-100 px-3 py-2 text-sm font-semibold" onClick={async () => { await api("/api/batches/activate", { method: "POST", body: JSON.stringify({ batch_code: batch.batch_code }) }); navigate("/matrix"); }}>View attendance</button>
-              <button type="button" className="rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => syncBatch(batch.batch_code)}>Sync Attendance</button>
+              {payload.role !== "centre" && (
+                <button type="button" className="rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => syncBatch(batch.batch_code)}>Sync Attendance</button>
+              )}
             </div>
             <label className="mt-3 block text-sm text-slate-600">
               Upload candidate workbook

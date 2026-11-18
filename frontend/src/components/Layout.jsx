@@ -42,9 +42,9 @@ export default function Layout({ onSignedOut }) {
 
   const running = ["running", "awaiting_login", "cancelling"].includes(boot?.sync?.status);
   const centreLogin = boot?.user?.role === "centre";
-  // Centre logins only manage their own centre — hide Settings and the all-centres list.
+  // Centres view reports only — no Settings, Centres admin list, or Sync.
   const links = centreLogin
-    ? LINKS.filter(([to]) => to !== "/settings" && to !== "/centres")
+    ? LINKS.filter(([to]) => to !== "/settings" && to !== "/centres" && to !== "/sync")
     : LINKS;
 
   return (
@@ -110,10 +110,15 @@ export default function Layout({ onSignedOut }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Link to="/sync" className="inline-flex items-center gap-2 rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white hover:bg-plum-800">
-              <RefreshCw size={16} className={running ? "animate-spin" : ""} />
-              {running ? "Sync in progress" : "Sync portal"}
-            </Link>
+            {!centreLogin && (
+              <Link to="/sync" className="inline-flex items-center gap-2 rounded-xl bg-plum-700 px-3 py-2 text-sm font-semibold text-white hover:bg-plum-800">
+                <RefreshCw size={16} className={running ? "animate-spin" : ""} />
+                {running ? "Sync in progress" : "Sync portal"}
+              </Link>
+            )}
+            {centreLogin && (
+              <span className="rounded-xl bg-plum-50 px-3 py-2 text-xs font-medium text-plum-800">Reports only · sync is admin</span>
+            )}
             <button
               type="button"
               className="inline-flex items-center gap-2 rounded-xl border border-plum-100 px-3 py-2 text-sm font-semibold text-slate-700"

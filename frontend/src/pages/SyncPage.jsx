@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
 import { api, apiUrl } from "../api";
 import { stamp } from "../utils";
 
@@ -15,18 +16,22 @@ const STEPS = [
 ];
 
 export default function SyncPage() {
+  const [role, setRole] = useState(null);
   const [current, setCurrent] = useState(null);
   const [history, setHistory] = useState([]);
-  const [mode, setMode] = useState("full");
+  const [mode, setMode] = useState("incremental");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState([]);
+  const [showExcel, setShowExcel] = useState(false);
+  const [cloudBlocked, setCloudBlocked] = useState(false);
+  const [batchCode, setBatchCode] = useState("");
   const [remoteBrowser, setRemoteBrowser] = useState(false);
   const [remoteBrowserPath, setRemoteBrowserPath] = useState("");
-  const [showLive, setShowLive] = useState(false);
+  const [showLive, setShowLive] = useState(true);
 
   const refresh = () => {
     api("/api/sync/current").then((payload) => setCurrent(payload.sync)).catch((err) => setError(err.message));
@@ -36,18 +41,72 @@ export default function SyncPage() {
   useEffect(() => {
     api("/api/bootstrap")
       .then((payload) => {
+        setRole(payload.user?.role || "admin");
+        setCloudBlocked(Boolean(payload.cloud_sync_blocked));
         setRemoteBrowser(Boolean(payload.remote_browser));
         setRemoteBrowserPath(payload.remote_browser_path || "");
+        setBatchCode(payload.batch?.batch_code || "");
       })
-      .catch(() => {});
+      .catch(() => setRole("admin"));
     refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
   }, []);
 
+  if (role === "centre") {
+    return <Navigate to="/" replace />;
+  }
+
   const running = ["running", "awaiting_login", "cancelling"].includes(current?.status);
+  const completed = current?.status === "completed";
   const stepIndex = STEPS.findIndex((step) => step[0] === current?.progress_step);
   const browserSrc = remoteBrowserPath ? apiUrl(remoteBrowserPath) : "";
+
+  async function startLive() {
+    setError("");
+    setMessage("");
+    if (mode === "date" && !dateFrom) {
+      setError("Choose the date to check.");
+      return;
+    }
+    if (mode === "range" && (!dateFrom || !dateTo)) {
+      setError("Choose the start date and the end date.");
+      return;
+    }
+    const payloadMode = mode === "date" ? "range" : mode;
+    const from = mode === "incremental" ? null : dateFrom || null;
+    const to = mode === "date" ? dateFrom : mode === "range" ? dateTo : null;
+    setBusy(true);
+    try {
+      await api("/api/sync/start", {
+        method: "POST",
+        body: JSON.stringify({ mode: payloadMode, date_from: from, date_to: to }),
+      });
+      setShowLive(true);
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publishOnline() {
+    setError("");
+    setMessage("");
+    setBusy(true);
+    try {
+      const result = await api("/api/admin/publish-online", {
+        method: "POST",
+        body: JSON.stringify({ batch_code: batchCode || null }),
+      });
+      setMessage(result.message || "Published to online centres.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function uploadExcel() {
     setError("");
@@ -85,67 +144,41 @@ export default function SyncPage() {
     }
   }
 
-  async function startLive() {
-    setError("");
-    setMessage("");
-    if (mode === "date" && !dateFrom) {
-      setError("Choose the date to check.");
-      return;
-    }
-    if (mode === "range" && (!dateFrom || !dateTo)) {
-      setError("Choose the start date and the end date.");
-      return;
-    }
-    const payloadMode = mode === "date" ? "range" : mode;
-    const from = mode === "incremental" ? null : dateFrom || null;
-    const to = mode === "date" ? dateFrom : mode === "range" ? dateTo : null;
-    setBusy(true);
-    try {
-      await api("/api/sync/start", {
-        method: "POST",
-        body: JSON.stringify({ mode: payloadMode, date_from: from, date_to: to }),
-      });
-      setShowLive(true);
-      refresh();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Portal sync</h1>
+        <h1 className="text-2xl font-semibold">Admin portal sync</h1>
         <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-          Upload Kaushal <span className="font-medium text-slate-700">Download Excel</span> files here (works on the online site).
-          Official attendance is never edited.
+          Only the administrator syncs attendance (Chromium on this Mac). Centre logins view reports online and cannot sync.
+          After a local sync, click <span className="font-medium text-slate-700">Publish to online centres</span> so their reports update.
         </p>
+        {batchCode && <p className="mt-2 text-sm text-slate-600">Batch on screen: <span className="font-semibold">{batchCode}</span></p>}
       </div>
 
+      {cloudBlocked && (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          This online site is for centre reports. Sync Chromium on your Mac at <span className="font-semibold">http://127.0.0.1:8000</span>, then publish here so centres see the updates.
+        </section>
+      )}
+
       <section className="rounded-2xl bg-white p-5 shadow-card">
-        <h2 className="font-semibold">Upload Kaushal Excel</h2>
+        <h2 className="font-semibold">Chromium sync (administrator)</h2>
         <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-          <li>Open Kaushal in your normal browser and sign in</li>
-          <li>Go to Candidate Attendance Report → enter Candidate ID → Submit</li>
-          <li>Click <span className="font-medium">Download Excel</span> for each candidate</li>
-          <li>Select <span className="font-medium">all Excel files at once</span> below and import</li>
+          <li>On your Mac open the local app and run <span className="font-medium">scripts/open-kaushal-chrome.sh</span></li>
+          <li>Sign into Kaushal in that Chrome window</li>
+          <li>Start sync below for the batch on screen</li>
+          <li>Publish to online so every centre login can see the reports</li>
         </ol>
-        <p className="mt-3 text-sm text-slate-500">
-          Each Excel file’s Batch Reg No. is used automatically, so punches go to the right batch.
-          Dates before that batch’s start are ignored. Wrong Candidate IDs are skipped — existing marks are not wiped.
-        </p>
 
         <div className="mt-5 flex flex-wrap gap-4 text-sm">
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> All dates in file</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only</label>
+          <label className="flex items-center gap-2"><input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> All dates</label>
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "date"} onChange={() => setMode("date")} /> One date</label>
           <label className="flex items-center gap-2"><input type="radio" checked={mode === "range"} onChange={() => setMode("range")} /> Date range</label>
-          <label className="flex items-center gap-2"><input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only</label>
         </div>
         {mode === "date" && (
           <div className="mt-4">
-            <label className="mb-1 block text-xs font-medium text-slate-500">Date to import</label>
+            <label className="mb-1 block text-xs font-medium text-slate-500">Date</label>
             <input type="date" className="rounded-xl border border-plum-100 px-3 py-2" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           </div>
         )}
@@ -162,24 +195,27 @@ export default function SyncPage() {
           </div>
         )}
 
-        <div className="mt-5">
-          <input
-            type="file"
-            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            multiple
-            onChange={(event) => setFiles(Array.from(event.target.files || []))}
-            className="block w-full text-sm text-slate-600"
-          />
-          {files.length > 0 && (
-            <p className="mt-2 text-xs text-slate-500">{files.length} file(s) selected</p>
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button type="button" disabled={busy || running || cloudBlocked} onClick={startLive} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
+            START CHROMIUM SYNC
+          </button>
+          {running && (
+            <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
+              Stop sync
+            </button>
+          )}
+          <button type="button" disabled={busy || running} onClick={publishOnline} className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold disabled:opacity-50">
+            PUBLISH TO ONLINE CENTRES
+          </button>
+          {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
+            <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/login-done", { method: "POST" })}>
+              I have logged in
+            </button>
           )}
         </div>
-
-        <div className="mt-5 flex flex-wrap gap-3">
-          <button type="button" disabled={busy || running} onClick={uploadExcel} className="rounded-xl bg-plum-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
-            UPLOAD EXCEL &amp; IMPORT
-          </button>
-        </div>
+        {completed && !cloudBlocked && (
+          <p className="mt-3 text-sm text-emerald-700">Local sync finished. Publish to online so centre logins can see this batch’s reports.</p>
+        )}
         {message && <p className="mt-3 text-sm text-emerald-700">{message}</p>}
         {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
       </section>
@@ -187,35 +223,34 @@ export default function SyncPage() {
       {remoteBrowser && (
         <section className="rounded-2xl bg-white p-5 shadow-card">
           <button type="button" className="text-sm font-semibold text-plum-700" onClick={() => setShowLive((value) => !value)}>
-            {showLive ? "Hide live window (often blocked by Kaushal)" : "Show live window (optional — often returns 401)"}
+            {showLive ? "Hide live window" : "Show live window"}
           </button>
-          {showLive && (
-            <div className="mt-4">
-              <div className="mb-4 flex flex-wrap gap-3">
-                <button type="button" disabled={busy || running} onClick={startLive} className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold disabled:opacity-50">
-                  Start live sync
-                </button>
-                {running && (
-                  <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/cancel", { method: "POST" })}>
-                    Stop sync
-                  </button>
-                )}
-                <button type="button" className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold" onClick={() => api("/api/sync/reopen-browser", { method: "POST" }).catch((err) => setError(err.message))}>
-                  Reload Kaushal login
-                </button>
-                {(current?.status === "awaiting_login" || current?.progress_step === "awaiting_login") && (
-                  <button type="button" className="rounded-xl border border-gold px-4 py-3 text-sm font-semibold text-gold" onClick={() => api("/api/sync/login-done", { method: "POST" })}>
-                    I have logged in
-                  </button>
-                )}
-              </div>
-              {browserSrc ? (
-                <iframe title="Kaushal portal live browser" src={browserSrc} className="h-[60vh] min-h-[360px] w-full rounded-xl border border-plum-100 bg-slate-900" allow="clipboard-read; clipboard-write" />
-              ) : null}
-            </div>
-          )}
+          {showLive && browserSrc ? (
+            <iframe title="Kaushal portal live browser" src={browserSrc} className="mt-4 h-[60vh] min-h-[360px] w-full rounded-xl border border-plum-100 bg-slate-900" allow="clipboard-read; clipboard-write" />
+          ) : null}
         </section>
       )}
+
+      <section className="rounded-2xl bg-white p-5 shadow-card">
+        <button type="button" className="text-sm font-semibold text-slate-600" onClick={() => setShowExcel((value) => !value)}>
+          {showExcel ? "Hide emergency Excel import" : "Emergency Excel import (admin fallback)"}
+        </button>
+        {showExcel && (
+          <div className="mt-4 space-y-4">
+            <p className="text-sm text-slate-500">Use only if Chromium sync is unavailable. Prefer Chromium + Publish.</p>
+            <input
+              type="file"
+              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              multiple
+              onChange={(event) => setFiles(Array.from(event.target.files || []))}
+              className="block w-full text-sm text-slate-600"
+            />
+            <button type="button" disabled={busy || running} onClick={uploadExcel} className="rounded-xl border border-plum-100 px-4 py-3 text-sm font-semibold disabled:opacity-50">
+              Upload Excel &amp; import
+            </button>
+          </div>
+        )}
+      </section>
 
       <section className="rounded-2xl bg-white p-5 shadow-card">
         <h2 className="font-semibold">Progress</h2>
