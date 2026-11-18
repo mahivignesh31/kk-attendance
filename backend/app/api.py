@@ -222,6 +222,42 @@ def cell_route(candidate_pk: int, date: str):
     return payload
 
 
+class MarkDayBody(BaseModel):
+    date: str
+    status: str = "present"
+    batch_code: str | None = None
+
+
+@router.post("/attendance/mark-day")
+def mark_day_route(body: MarkDayBody):
+    """Set every candidate on the batch to Present / Half day / Absent for one date."""
+    from .calculator import parse_date
+    from .reporting import load_context, mark_batch_day
+
+    status = (body.status or "present").strip().lower()
+    if status not in {"present", "half_day", "absent"}:
+        raise HTTPException(status_code=400, detail="Status must be present, half_day, or absent.")
+    day = parse_date(body.date)
+    if day is None:
+        raise HTTPException(status_code=400, detail="Choose a valid attendance date.")
+    with read_conn() as conn:
+        context = load_context(conn)
+    code = (body.batch_code or (context.get("batch") or {}).get("batch_code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Select a batch before marking the day.")
+    if _user().get("role") == "centre":
+        with read_conn() as conn:
+            row = conn.execute(
+                "SELECT centre_id FROM batches WHERE batch_code = ?",
+                (code,),
+            ).fetchone()
+        if row is None or row["centre_id"] != _user().get("centre_id"):
+            raise HTTPException(status_code=404, detail="Batch was not found.")
+    with transaction() as conn:
+        result = mark_batch_day(conn, batch_code=code, day=day, status=status)
+    return result
+
+
 @router.get("/settings")
 def settings_route():
     with read_conn() as conn:

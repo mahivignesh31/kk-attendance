@@ -596,10 +596,21 @@ def attendance_cell(conn: sqlite3.Connection, candidate_pk: int, attendance_date
         enrollment=enrollment,
         removal=removal,
     )
-    date_row = conn.execute(
-        "SELECT * FROM attendance_dates WHERE attendance_date = ?",
-        (day.isoformat(),),
-    ).fetchone()
+    batch_id = None
+    code = (context.get("batch") or {}).get("batch_code")
+    if code:
+        batch_row = conn.execute("SELECT id FROM batches WHERE batch_code = ?", (code,)).fetchone()
+        batch_id = batch_row["id"] if batch_row else None
+    if batch_id is not None:
+        date_row = conn.execute(
+            "SELECT * FROM attendance_dates WHERE attendance_date = ? AND batch_id = ?",
+            (day.isoformat(), batch_id),
+        ).fetchone()
+    else:
+        date_row = conn.execute(
+            "SELECT * FROM attendance_dates WHERE attendance_date = ?",
+            (day.isoformat(),),
+        ).fetchone()
     return {
         "candidate": {
             "id": candidate["id"],
@@ -613,6 +624,135 @@ def attendance_cell(conn: sqlite3.Connection, candidate_pk: int, attendance_date
         "sessions": sessions,
         "date_summary": dict(date_row) if date_row else None,
         "labels": {"calculated": STATUS_LABELS, "official": OFFICIAL_LABELS},
+    }
+
+
+def mark_batch_day(
+    conn: sqlite3.Connection,
+    *,
+    batch_code: str,
+    day: date,
+    status: str = "present",
+) -> dict:
+    """Mark every candidate on a batch Present / Half day / Absent for one calendar day."""
+    status_map = {
+        "present": ("present", "full_day", 540),
+        "half_day": ("half_day", "half_day", 270),
+        "absent": ("absent", "absent", 0),
+    }
+    official, calculated, minutes = status_map[status]
+    batch_row = conn.execute("SELECT * FROM batches WHERE batch_code = ?", (batch_code,)).fetchone()
+    if batch_row is None:
+        raise ValueError(f"Batch {batch_code} was not found.")
+    batch_id = int(batch_row["id"])
+    candidates = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT * FROM candidates
+            WHERE batch_id = ? OR batch_registration_number = ?
+            ORDER BY sr_no, id
+            """,
+            (batch_id, batch_code),
+        )
+    ]
+    if not candidates:
+        raise ValueError("This batch has no candidates yet.")
+
+    day_iso = day.isoformat()
+    now = now_iso()
+    in_time = "09:00:00" if status != "absent" else None
+    out_time = "18:00:00" if status == "present" else ("13:00:00" if status == "half_day" else None)
+    written = 0
+    for candidate in candidates:
+        conn.execute(
+            """
+            INSERT INTO attendance_records (
+                candidate_pk, attendance_date, batch_id, official_status, official_categories,
+                calculated_status, in_time, out_time, elapsed_minutes, lunch_deduction_minutes,
+                qualifying_minutes, portal_candidate_name, data_source, last_synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'manual_mark', ?)
+            ON CONFLICT(candidate_pk, attendance_date) DO UPDATE SET
+                batch_id = excluded.batch_id,
+                official_status = excluded.official_status,
+                official_categories = excluded.official_categories,
+                calculated_status = excluded.calculated_status,
+                in_time = excluded.in_time,
+                out_time = excluded.out_time,
+                elapsed_minutes = excluded.elapsed_minutes,
+                lunch_deduction_minutes = excluded.lunch_deduction_minutes,
+                qualifying_minutes = excluded.qualifying_minutes,
+                portal_candidate_name = excluded.portal_candidate_name,
+                data_source = excluded.data_source,
+                last_synced_at = excluded.last_synced_at
+            """,
+            (
+                int(candidate["id"]),
+                day_iso,
+                batch_id,
+                official,
+                json.dumps([official]),
+                calculated,
+                in_time,
+                out_time,
+                minutes,
+                minutes,
+                candidate.get("name") or "",
+                now,
+            ),
+        )
+        stored = conn.execute(
+            "SELECT id FROM attendance_records WHERE candidate_pk = ? AND attendance_date = ?",
+            (int(candidate["id"]), day_iso),
+        ).fetchone()
+        conn.execute("DELETE FROM attendance_sessions WHERE record_id = ?", (stored["id"],))
+        if in_time and out_time:
+            conn.execute(
+                """
+                INSERT INTO attendance_sessions (
+                    record_id, session_index, in_time, out_time, invalid
+                ) VALUES (?, 0, ?, ?, 0)
+                """,
+                (stored["id"], in_time, out_time),
+            )
+        written += 1
+
+    present = written if status == "present" else 0
+    half = written if status == "half_day" else 0
+    absent = written if status == "absent" else 0
+    conn.execute(
+        """
+        INSERT INTO attendance_dates (
+            batch_id, attendance_date, enrolled_count, present_count, half_day_count,
+            absent_count, rf_attendance_count, ojt_attendance_count, portal_date_text,
+            detail_synced, portal_synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 1, ?)
+        ON CONFLICT(batch_id, attendance_date) DO UPDATE SET
+            enrolled_count = excluded.enrolled_count,
+            present_count = excluded.present_count,
+            half_day_count = excluded.half_day_count,
+            absent_count = excluded.absent_count,
+            detail_synced = 1,
+            portal_synced_at = excluded.portal_synced_at
+        """,
+        (
+            batch_id,
+            day_iso,
+            len(candidates),
+            present,
+            half,
+            absent,
+            day.strftime("%d-%m-%Y"),
+            now,
+        ),
+    )
+    return {
+        "ok": True,
+        "batch_code": batch_code,
+        "date": day_iso,
+        "status": status,
+        "records_written": written,
+        "message": f"Marked {written} candidate(s) {status.replace('_', ' ')} on {day_iso} for {batch_code}.",
     }
 
 
