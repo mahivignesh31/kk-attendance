@@ -132,7 +132,7 @@ export default function Dashboard() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold">Candidates below {data.rules.low_attendance_threshold}%</h2>
-            <p className="text-sm text-slate-500">A day with no attendance mark counts as absent and lowers this percentage.</p>
+            <p className="text-sm text-slate-500">A day with no attendance mark counts as absent and lowers this percentage. The last column is how many more full days they must attend. Each of those days also counts as a class day.</p>
           </div>
           <a className="text-sm font-semibold text-plum-700" href={apiUrl("/api/export/low-attendance")}>Download report</a>
         </div>
@@ -148,6 +148,7 @@ export default function Dashboard() {
                   <th className="py-2 font-medium">Full</th>
                   <th className="py-2 font-medium">Half</th>
                   <th className="py-2 font-medium">Absent</th>
+                  <th className="py-2 font-medium">Full days to reach {data.rules.low_attendance_threshold}%</th>
                 </tr>
               </thead>
               <tbody>
@@ -158,6 +159,7 @@ export default function Dashboard() {
                     <td className="py-2">{row.full_days}</td>
                     <td className="py-2">{row.half_days}</td>
                     <td className="py-2">{row.absent_days}</td>
+                    <td className="py-2">{row.days_to_threshold ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>

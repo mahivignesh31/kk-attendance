@@ -487,6 +487,7 @@ def matrix(conn: sqlite3.Connection, date_from: str | None = None, date_to: str 
                 "full_days": summary["full_days"],
                 "half_days": summary["half_days"],
                 "absent_days": summary["absent_days"],
+                "days_to_threshold": summary["days_to_threshold"],
                 "cells": cells,
             }
         )
@@ -506,6 +507,7 @@ def matrix(conn: sqlite3.Connection, date_from: str | None = None, date_to: str 
         ],
         "rows": matrix_rows,
         "candidate_count": len(matrix_rows),
+        "low_attendance_threshold": context["rules"].get("low_attendance_threshold", 75),
     }
 
 
@@ -581,7 +583,13 @@ def candidate_profile(conn: sqlite3.Connection, candidate_pk: int) -> dict | Non
             (candidate_pk,),
         )
     ]
-    return {"candidate": stats, "timeline": timeline, "monthly": monthly_rows, "sessions": sessions}
+    return {
+        "candidate": stats,
+        "timeline": timeline,
+        "monthly": monthly_rows,
+        "sessions": sessions,
+        "low_attendance_threshold": context["rules"].get("low_attendance_threshold", 75),
+    }
 
 
 def attendance_cell(conn: sqlite3.Connection, candidate_pk: int, attendance_date: str) -> dict | None:
@@ -830,15 +838,21 @@ def recalculate_all(conn: sqlite3.Connection, rules: dict | None = None) -> int:
             "SELECT * FROM attendance_sessions WHERE record_id = ? ORDER BY session_index",
             (record["id"],),
         ).fetchall()
-        if record["calculated_status"] == "absent" and not sessions:
-            continue
-        if not sessions:
-            continue
         spans = []
-        for session in sessions:
-            in_clock, in_invalid = parse_clock(session["in_time"])
-            out_clock, out_invalid = parse_clock(session["out_time"])
-            spans.append(SessionSpan(in_clock, out_clock, invalid=bool(session["invalid"]) or in_invalid or out_invalid))
+        if sessions:
+            for session in sessions:
+                in_clock, in_invalid = parse_clock(session["in_time"])
+                out_clock, out_invalid = parse_clock(session["out_time"])
+                spans.append(SessionSpan(in_clock, out_clock, invalid=bool(session["invalid"]) or in_invalid or out_invalid))
+        else:
+            # Check-in-only days used to be stored as absent with the punch
+            # kept on the record and the session row dropped. Recalculate from
+            # those times so a later rules change still applies.
+            in_clock, in_invalid = parse_clock(record["in_time"])
+            out_clock, out_invalid = parse_clock(record["out_time"])
+            if in_clock is None and out_clock is None and not in_invalid and not out_invalid:
+                continue
+            spans.append(SessionSpan(in_clock, out_clock, invalid=in_invalid or out_invalid))
         day = parse_date(record["attendance_date"])
         if day is None:
             continue
@@ -1011,6 +1025,7 @@ def low_attendance_rows(conn: sqlite3.Connection) -> list[dict]:
                 "Full Days": item["full_days"],
                 "Half Days": item["half_days"],
                 "Absent Days": item["absent_days"],
+                "Full days to reach threshold": item["days_to_threshold"] if item["days_to_threshold"] is not None else "",
                 "Qualifying Hours": item["qualifying_hours"] if item["qualifying_hours"] is not None else "",
                 "Threshold %": threshold,
             }

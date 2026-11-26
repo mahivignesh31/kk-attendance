@@ -31,6 +31,11 @@ export default function CandidateProfile() {
           <div className="text-right">
             <div className="text-3xl font-semibold text-plum-800">{percent(person.verified_percent)}</div>
             <div className="text-xs text-slate-500">Classroom attendance %</div>
+            {person.days_to_threshold != null && (
+              <div className="mt-1 max-w-xs text-sm font-medium text-amber-800">
+                Attend {person.days_to_threshold} more full {person.days_to_threshold === 1 ? "day" : "days"} to reach {data.low_attendance_threshold ?? 75}%.
+              </div>
+            )}
           </div>
         </div>
         <dl className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

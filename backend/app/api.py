@@ -210,7 +210,11 @@ def matrix_route(date_from: str | None = None, date_to: str | None = None):
 @router.get("/candidates")
 def candidates_route():
     with read_conn() as conn:
-        return {"candidates": candidate_stats(load_context(conn))}
+        context = load_context(conn)
+        return {
+            "candidates": candidate_stats(context),
+            "low_attendance_threshold": context["rules"].get("low_attendance_threshold", 75),
+        }
 
 
 @router.post("/candidates/delete-all")

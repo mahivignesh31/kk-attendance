@@ -88,6 +88,9 @@ export default function Matrix() {
                   })}
                   <td className="border-b border-plum-50 px-3 py-2 text-right">
                     <div className="font-semibold">{percent(row.verified_percent)}</div>
+                    {row.days_to_threshold != null && (
+                      <div className="text-xs text-amber-800">{row.days_to_threshold} full {row.days_to_threshold === 1 ? "day" : "days"} to {data.low_attendance_threshold ?? 75}%</div>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
 
@@ -453,6 +453,29 @@ def calculate_attendance(full_days: float, half_days: float, total_working_days:
     return _percentage(credits, total)
 
 
+def full_days_to_reach(credits: float, eligible_days: float, target_percent: float = 75) -> Optional[int]:
+    """Full days still required so attendance reaches the target.
+
+    Each future full day adds one credit and one class day:
+    (credits + n) / (eligible + n) >= target.
+    Returns None when there is no class day yet, the candidate is already
+    at the target, or the target is 100% after a missed day.
+    """
+    eligible = _non_negative(eligible_days)
+    if eligible <= 0:
+        return None
+    credit = min(_non_negative(credits), eligible)
+    target = _non_negative(target_percent) / Decimal(100)
+    if target <= 0 or credit / eligible >= target:
+        return None
+    if target >= 1:
+        return None
+    needed = (target * eligible - credit) / (Decimal(1) - target)
+    if needed <= 0:
+        return None
+    return int(needed.to_integral_value(rounding=ROUND_CEILING))
+
+
 def _non_negative(value: float) -> Decimal:
     try:
         number = Decimal(str(value))
@@ -501,6 +524,7 @@ class AttendanceTotals:
     attendance_credits: float = 0.0
     verified_percent: Optional[float] = None
     coverage_percent: Optional[float] = None
+    days_to_threshold: Optional[int] = None
 
     def as_dict(self) -> dict:
         return {
@@ -518,6 +542,7 @@ class AttendanceTotals:
             "attendance_credits": self.attendance_credits,
             "verified_percent": self.verified_percent,
             "coverage_percent": self.coverage_percent,
+            "days_to_threshold": self.days_to_threshold,
         }
 
 
@@ -539,7 +564,6 @@ def summarize_candidate(
     A class day with no mark is absent. Today is left out until that day's
     attendance is finalized.
     """
-    del rules
     totals = AttendanceTotals()
     for day in portal_days:
         record = records_by_day.get(day)
@@ -580,6 +604,11 @@ def summarize_candidate(
         else None
     )
     totals.attendance_credits = float(totals.full_days + Decimal(totals.half_days) * Decimal("0.5"))
+    try:
+        threshold = float((rules or {}).get("low_attendance_threshold", 75))
+    except (TypeError, ValueError):
+        threshold = 75.0
+    totals.days_to_threshold = full_days_to_reach(totals.attendance_credits, totals.eligible_days, threshold)
     if totals.eligible_days:
         totals.coverage_percent = float(
             (Decimal(totals.verified_days) / Decimal(totals.eligible_days) * Decimal(100)).quantize(
@@ -620,13 +649,22 @@ def _finalized(record: Optional[dict]) -> bool:
     status = record.get("calculated_status")
     if official in {"present", "half_day", "absent"}:
         return True
-    return status in VERIFIED_STATUSES and not _unearned_full_day(record)
+    return status in VERIFIED_STATUSES
 
 
 def _unearned_full_day(record: dict) -> bool:
-    """A lone punch is already absent, so nothing further is removed here."""
-    del record
-    return False
+    """A stored full day with one punch, or out 00:00:00, did not earn the day.
+
+    Newer syncs already store that case as absent. This catches rows saved
+    while a missing check-out was still counted as a full day.
+    """
+    in_clock, in_invalid = parse_clock(record.get("in_time"))
+    out_clock, out_invalid = parse_clock(record.get("out_time"))
+    if in_invalid or out_invalid:
+        return True
+    if out_clock == time(0, 0):
+        out_clock = None
+    return (in_clock is None) != (out_clock is None)
 
 
 def _category_set(record: dict) -> set[str]:
@@ -673,7 +711,7 @@ def _credit(record: Optional[dict]) -> tuple[str, Optional[float]]:
         return "absent", 0.0
     status = record.get("calculated_status") or ""
     if status == "full_day" and _unearned_full_day(record):
-        return "incomplete", None
+        return "absent", 0.0
     if status == "full_day":
         return "full_day", 1.0
     if status == "half_day":
@@ -717,13 +755,15 @@ def grace_occasion_from_record(record: Optional[dict], rules: dict) -> bool:
     """True when the stored day is still Full day and late/early is in the 16–60 min grace band."""
     if not record or (record.get("calculated_status") or "") != "full_day":
         return False
+    if _unearned_full_day(record):
+        return False
     schedule_start, _ = parse_clock(rules.get("training_start") or "09:00")
     schedule_end, _ = parse_clock(rules.get("training_end") or "18:00")
     if schedule_start is None or schedule_end is None:
         return False
     in_clock, _ = parse_clock(record.get("in_time"))
     out_clock, _ = parse_clock(record.get("out_time"))
-    # Midnight out is treated as missing checkout (late-only), same as calculate_hours.
+    # Out 00:00:00 is not a check-out, same as calculate_hours.
     if out_clock == time(0, 0):
         out_clock = None
     late = 0

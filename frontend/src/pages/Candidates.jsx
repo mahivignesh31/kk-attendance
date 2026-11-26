@@ -5,13 +5,17 @@ import { percent } from "../utils";
 
 export default function Candidates() {
   const [rows, setRows] = useState(null);
+  const [threshold, setThreshold] = useState(75);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState("");
 
   function load() {
-    api("/api/candidates").then((payload) => setRows(payload.candidates)).catch((err) => setError(err.message));
+    api("/api/candidates").then((payload) => {
+      setRows(payload.candidates);
+      setThreshold(payload.low_attendance_threshold ?? 75);
+    }).catch((err) => setError(err.message));
   }
 
   useEffect(() => {
@@ -65,7 +69,7 @@ export default function Candidates() {
         <table className="w-full min-w-[760px] text-left text-sm">
           <thead className="text-slate-500">
             <tr>
-              {["Name", "KP Id", "Status", "Working days", "Full", "Half", "Absent", "Credits", "Classroom %"].map((heading) => (
+              {["Name", "KP Id", "Status", "Working days", "Full", "Half", "Absent", "Credits", "Classroom %", `Full days to reach ${threshold}%`].map((heading) => (
                 <th key={heading} className="px-4 py-3 font-medium">{heading}</th>
               ))}
             </tr>
@@ -82,6 +86,7 @@ export default function Candidates() {
                 <td className="px-4 py-3">{row.absent_days}</td>
                 <td className="px-4 py-3">{row.attendance_credits}</td>
                 <td className="px-4 py-3 font-semibold">{percent(row.verified_percent)}</td>
+                <td className="px-4 py-3">{row.days_to_threshold ?? "—"}</td>
               </tr>
             ))}
           </tbody>

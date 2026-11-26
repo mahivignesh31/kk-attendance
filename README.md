@@ -69,7 +69,7 @@ Training is 9:00–18:00 with lunch 13:00–14:00, so a full schedule is 8 quali
 - 6 hours or more: Full day
 - 3 hours up to, but not including, 6: Half day
 - Under 3 hours: Insufficient hours, counted as absent in the percentage
-- Check-in without check-out: Incomplete record
+- Check-in without check-out: Absent
 - No portal row: Not yet verified
 
 Overlapping punches are merged before lunch is removed, so the same minutes are not counted twice. Only the part of a session that falls inside lunch is deducted.

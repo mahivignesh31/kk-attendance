@@ -7,6 +7,7 @@ import pytest
 from app.calculator import (
     SessionSpan,
     calculate_attendance,
+    full_days_to_reach,
     calculate_hours,
     grace_days_to_demote,
     parse_clock,
@@ -334,6 +335,18 @@ def test_four_full_and_one_half_out_of_nine_days_is_50_percent():
     assert totals.half_days == 1
     assert totals.absent_days == 4
     assert totals.verified_percent == 50.0
+    # 4.5 credits over 9 days is 50%. Nine more full days make (4.5 + 9) / 18 = 75%.
+    assert totals.days_to_threshold == 9
+
+
+def test_full_days_to_reach_75():
+    assert full_days_to_reach(7, 10, 75) == 2
+    assert full_days_to_reach(6.5, 10, 75) == 4
+    assert full_days_to_reach(0, 10, 75) == 30
+    assert full_days_to_reach(7.5, 11, 75) == 3
+    assert full_days_to_reach(8, 10, 75) is None
+    assert full_days_to_reach(7.5, 10, 75) is None
+    assert full_days_to_reach(0, 0, 75) is None
 
 
 def test_attendance_formula_rounds_to_two_decimals():
@@ -403,18 +416,43 @@ def test_sop_absent_wins_over_portal_present_label():
     assert on_job.verified_percent == 100.0
 
 
-def test_single_punch_or_midnight_out_is_full_day_under_sop():
+def test_stale_full_day_without_checkout_counts_as_absent():
+    from app.calculator import cell_status
+
     day = date(2026, 11, 6)
+    midnight_row = {"calculated_status": "full_day", "official_status": "present", "in_time": "08:37:13", "out_time": "00:00:00"}
     totals = summarize_candidate(
         [day],
-        {day: {"calculated_status": "full_day", "official_status": "present", "in_time": "08:37:13", "out_time": "00:00:00"}},
+        {day: midnight_row},
         today=day + timedelta(days=1),
         rules=RULES,
         enrollment=day,
         removal=None,
     )
-    assert totals.full_days == 1
-    assert totals.verified_percent == 100.0
+    assert totals.full_days == 0
+    assert totals.absent_days == 1
+    assert totals.verified_percent == 0.0
+    lone = summarize_candidate(
+        [day],
+        {day: {"calculated_status": "full_day", "official_status": "present", "in_time": "09:10:00", "out_time": None}},
+        today=day + timedelta(days=1),
+        rules=RULES,
+        enrollment=day,
+        removal=None,
+    )
+    assert lone.full_days == 0
+    assert lone.absent_days == 1
+    assert lone.verified_percent == 0.0
+    cell = cell_status(
+        day,
+        midnight_row,
+        today=day + timedelta(days=1),
+        rules=RULES,
+        enrollment=day,
+        removal=None,
+    )
+    assert cell["status"] == "absent"
+    assert cell["grace"] is False
 
 
 def test_today_is_left_out_until_attendance_is_finalized():
@@ -500,11 +538,22 @@ def test_reconcile_uses_timestamps_and_does_not_double_count():
     assert by_id[19].calculated_status == "full_day"
     assert by_id[19].qualifying_minutes == 589
     assert by_id[19].official_status == "present"
-    assert by_id[6].calculated_status == "full_day"
+    assert by_id[6].calculated_status == "absent"
+    assert by_id[6].qualifying_minutes is None
     assert by_id[6].out_time is None
+    assert len(by_id[6].sessions) == 1
+    assert by_id[6].sessions[0].in_time == "09:10:00"
     assert by_id[7].calculated_status == "absent"
+    assert by_id[7].sessions == []
     assert by_id[7].qualifying_minutes == 0
     assert len(result.records) == 3
+    single = [issue for issue in result.issues if issue.issue_type == "single_punch" and issue.candidate_pk == 6]
+    assert len(single) == 1
+    assert single[0].local_value == "absent"
+    differ = [issue for issue in result.issues if issue.issue_type == "hours_differ_from_official" and issue.candidate_pk == 6]
+    assert len(differ) == 1
+    assert differ[0].portal_value == "present"
+    assert differ[0].local_value == "absent"
 
 
 def test_summary_mismatch_blocks_a_complete_reconcile():
@@ -596,6 +645,85 @@ def test_recalculate_changes_local_status_only(tmp_path, monkeypatch):
     assert stored["official_status"] == "half_day"
     assert stored["calculated_status"] == "half_day"
     assert stored["qualifying_minutes"] == 360
+
+
+def test_recalculate_applies_sop_when_the_check_in_has_no_session_row(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATTENDANCE_DB", str(tmp_path / "lone.db"))
+    from app.db import init_db, transaction
+    from app.reporting import recalculate_all
+
+    init_db()
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO candidates (
+                candidate_id, attendance_id, name, sr_no, candidate_status, add_remove_date,
+                created_at, updated_at
+            ) VALUES ('2628752093', '09372544', 'Badugu Mamatha', 6, 'Active', '2026-10-15', 'now', 'now')
+            """
+        )
+        candidate_pk = conn.execute("SELECT id FROM candidates").fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO attendance_records (
+                candidate_pk, attendance_date, official_status, official_categories, calculated_status,
+                in_time, out_time, data_source, last_synced_at
+            ) VALUES (?, '2026-11-16', 'present', '["present"]', 'full_day', '09:10:00', NULL, 'kaushal_portal', 'now')
+            """,
+            (candidate_pk,),
+        )
+        conn.execute(
+            """
+            INSERT INTO attendance_records (
+                candidate_pk, attendance_date, official_status, official_categories, calculated_status,
+                in_time, out_time, data_source, last_synced_at
+            ) VALUES (?, '2026-11-17', 'absent', '["absent"]', 'absent', NULL, NULL, 'kaushal_portal', 'now')
+            """,
+            (candidate_pk,),
+        )
+        updated = recalculate_all(conn, RULES)
+        punch = conn.execute(
+            "SELECT calculated_status, official_status, qualifying_minutes FROM attendance_records WHERE attendance_date = '2026-11-16'"
+        ).fetchone()
+        blank = conn.execute(
+            "SELECT calculated_status, official_status FROM attendance_records WHERE attendance_date = '2026-11-17'"
+        ).fetchone()
+    assert updated == 1
+    assert punch["calculated_status"] == "absent"
+    assert punch["official_status"] == "absent"
+    assert punch["qualifying_minutes"] is None
+    assert blank["calculated_status"] == "absent"
+    assert blank["official_status"] == "absent"
+
+
+def test_late_absent_keeps_the_punch_sessions():
+    candidates = [{"id": 1, "candidate_id": "2628772980", "attendance_id": "1", "name": "Koduri Sathireddy"}]
+    result = reconcile_date(
+        attendance_day=DAY,
+        summary={"present": 1, "half_day": 0, "absent": 0, "rf": 0, "ojt": 0},
+        detail_rows=[{
+            "category": "present",
+            "candidate_id": "2628772980",
+            "name": "Koduri Sathireddy",
+            "attendance_id": "1",
+            "in_time": "14:00:00",
+            "out_time": "18:00:00",
+            "in_invalid": False,
+            "out_invalid": False,
+        }],
+        candidates=candidates,
+        rules=RULES,
+        opened_categories={"present"},
+        failed_categories=set(),
+    )
+    record = result.records[0]
+    assert record.calculated_status == "absent"
+    assert len(record.sessions) == 1
+    assert record.sessions[0].in_time == "14:00:00"
+    assert record.sessions[0].out_time == "18:00:00"
+    differ = [issue for issue in result.issues if issue.issue_type == "hours_differ_from_official"]
+    assert len(differ) == 1
+    assert differ[0].local_value == "absent"
 
 
 def test_excel_import_ignores_dates_before_batch_start():

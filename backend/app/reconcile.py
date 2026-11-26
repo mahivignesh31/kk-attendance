@@ -315,7 +315,7 @@ def _build_record(
                     f"{candidate.get('name')} on {day.isoformat()} has a check-in without a check-out. Counted as absent.",
                     int(candidate["id"]),
                     ",".join(categories),
-                    "full_day",
+                    result.calculated_status,
                 )
             )
         elif result.missing_checkout:
@@ -342,7 +342,7 @@ def _build_record(
                 "full_day",
             )
         )
-    elif official == "present" and result.calculated_status in {"half_day", "insufficient"}:
+    elif official == "present" and result.calculated_status in {"half_day", "insufficient", "absent"}:
         issues.append(
             Issue(
                 "hours_differ_from_official",
@@ -371,7 +371,7 @@ def _build_record(
         in_device_id=first.in_device_id if first else None,
         out_device_id=first.out_device_id if first else None,
         portal_name=next((row.get("name") for row in rows if row.get("name")), candidate.get("name")),
-        sessions=sessions if result.calculated_status != "absent" else [],
+        sessions=sessions,
         raw=[_public_row(row) for row in rows],
     )
 
