@@ -78,7 +78,7 @@ export default function CellDialog({ candidatePk, date, onClose }) {
             </div>
           )}
           <p className="text-xs leading-5 text-slate-500">
-            SOP day rule: 0–15 min late/early = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent. One punch or out 00:00:00 still uses late/early (a late-only punch is not automatic Present). No punch = Absent. Grace: 2 in any 15 days, then Half day. Lunch is not subtracted.
+            SOP day rule: 0–15 min late/early = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent. A check-in without a check-out is absent. No punch = Absent. Grace: 2 in any 15 days, then Half day. Lunch is not subtracted.
           </p>
         </div>
       )}

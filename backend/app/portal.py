@@ -462,10 +462,10 @@ class PortalClient:
         if not self._on_candidate_details():
             self._open_candidate_details_menu()
             self._wait_for_app()
-        if not self._candidate_id_form_visible():
+        if not self._wait_for_candidate_form():
             self._goto(PORTAL_CANDIDATE_DETAILS_URL)
             self._wait_for_app()
-        if not self._candidate_id_form_visible():
+        if not self._wait_for_candidate_form():
             self._shot("candidate-form-missing")
             raise PortalError(
                 "The Candidate ID form was not found in Chromium. After login, open REPORT → CANDIDATE ATTENDANCE REPORT, then start sync again."
@@ -581,7 +581,22 @@ class PortalClient:
             or (("candidate id" in text or "kp id" in text) and "attendance id" in text and "or" in text)
         )
 
+    def _wait_for_candidate_form(self, timeout: float = 20) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._check_cancel()
+            if self._candidate_id_form_visible():
+                return True
+            self.page.wait_for_timeout(400)
+        return False
+
     def _candidate_id_form_visible(self) -> bool:
+        try:
+            field = self.page.locator("#candidateid, input[name='candidateid']")
+            if field.count() and field.first.is_visible():
+                return True
+        except Exception:
+            pass
         kp_pattern = re.compile(r"(kp\s*id|kaushal\s*panjee\s*id|candidate\s*id)", re.I)
         try:
             if self.page.get_by_placeholder(kp_pattern).count():
@@ -635,6 +650,12 @@ class PortalClient:
         """Type KP Id into Candidate/KP Id only — never into Attendance Id."""
         kp_pattern = re.compile(r"(kp\s*id|kaushal\s*panjee\s*id|candidate\s*id)", re.I)
         field = None
+        try:
+            named = self.page.locator("#candidateid, input[name='candidateid']")
+            if named.count() and named.first.is_visible():
+                field = named.first
+        except Exception:
+            field = None
         for locator in (
             self.page.get_by_placeholder(kp_pattern),
             self.page.get_by_label(kp_pattern),

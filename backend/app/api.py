@@ -563,7 +563,7 @@ def recalculate_attendance():
             "16–60 min → Full day + 1 grace",
             "61–240 min → Half day",
             "> 4 hours → Absent",
-            "One punch / out 00:00:00 → still apply late/early (not auto Present)",
+            "Check-in without a check-out, or out 00:00:00 → Absent",
             "No punch on a working day → Absent",
         ],
     }

@@ -68,16 +68,16 @@ export default function Settings() {
           <p className="mt-1 text-sm leading-6 text-slate-500">
             Classroom only (RF / OJT not counted). Schedule {form.rules.training_start}–{form.rules.training_end} ({form.rules.scheduled_hours} hrs). Lunch is not subtracted.
             Late or early leave: 0–15 min = Full day (condoned); 16–60 min = Full day + 1 grace; 61–240 min = Half day; more than 4 hrs = Absent.
-            One punch (or out 00:00:00) still uses late/early vs training times — not an automatic Present. No punch on a working day = Absent.
+            A check-in without a check-out is absent. Out time 00:00:00 is a missing check-out. No punch on a day class was held = Absent.
             Grace: 2 occasions in any 15 calendar days; a further occasion becomes Half day.
-            Classroom % = (full days + half days × 0.5) / working days × 100. Alert below {form.rules.low_attendance_threshold}%.
+            Classroom % = (full days + half days × 0.5) / days class was held × 100. Alert below {form.rules.low_attendance_threshold}%.
           </p>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <Field label="Training start" type="time" value={form.rules.training_start} onChange={(value) => update("rules", "training_start", value)} />
             <Field label="Training end" type="time" value={form.rules.training_end} onChange={(value) => update("rules", "training_end", value)} />
             <Field label="Low attendance below (%)" type="number" value={form.rules.low_attendance_threshold} onChange={(value) => update("rules", "low_attendance_threshold", Number(value))} />
           </div>
-          <p className="mt-4 text-sm text-slate-600">Attendance uses every day from the batch start through today. Sundays are left out.</p>
+          <p className="mt-4 text-sm text-slate-600">Attendance uses the days this batch actually held class. Sundays are left out. A weekday with no class is not counted as absent.</p>
           <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.rules.count_time_outside_schedule} onChange={(event) => update("rules", "count_time_outside_schedule", event.target.checked)} /> Count time outside the scheduled 9:00–6:00 window</label>
           <button className="mt-5 rounded-xl bg-plum-700 px-4 py-2 text-sm font-semibold text-white" type="submit">Save settings</button>
         </section>

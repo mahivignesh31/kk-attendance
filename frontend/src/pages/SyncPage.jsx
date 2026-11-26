@@ -286,7 +286,7 @@ export default function SyncPage() {
           <li>When finished, click Publish all centres</li>
         </ol>
 
-        <p className="mt-4 text-sm text-slate-500">Syncs through yesterday only (IST). Today is never synced.</p>
+        <p className="mt-4 text-sm text-slate-500">Syncs through today (IST). Future dates are skipped. Today is included again on the next sync so later punches are picked up.</p>
         <div className="mt-3 flex flex-wrap gap-4 text-sm">
           <label className="flex items-center gap-2">
             <input type="radio" checked={mode === "incremental"} onChange={() => setMode("incremental")} /> New dates only

@@ -17,8 +17,8 @@ from .calculator import (
     format_minutes,
     grace_days_to_demote,
     sop_limits,
+    EXCLUDED_TRAINING_DAYS,
     hours_decimal,
-    total_training_days,
     now_iso,
     parse_clock,
     parse_date,
@@ -180,14 +180,32 @@ def _batch_end(context: dict) -> date | None:
 
 
 def _total_days(context: dict) -> list[date]:
-    days = total_training_days(context.get("batch_start"), context["today"], _batch_end(context))
-    if days:
-        return days
-    return [
-        day
-        for day in _portal_days(context["dates"])
-        if day <= context["today"] and day.weekday() != 6
-    ]
+    """Days class was held for this batch.
+
+    A day counts when the portal listed it or any candidate has a punch.
+    Sundays, future dates, and dates outside the batch are left out. A weekday
+    with no class is not an absence.
+    """
+    days = set(_portal_days(context["dates"]))
+    for record in context["records"]:
+        parsed = parse_date(record.get("attendance_date"))
+        if parsed:
+            days.add(parsed)
+    start = context.get("batch_start")
+    end = _batch_end(context)
+    today = context["today"]
+    kept = []
+    for day in sorted(days):
+        if day > today:
+            continue
+        if start and day < start:
+            continue
+        if end and day > end:
+            continue
+        if day.weekday() == 6 or day in EXCLUDED_TRAINING_DAYS:
+            continue
+        kept.append(day)
+    return kept
 
 
 def candidate_stats(context: dict) -> list[dict]:

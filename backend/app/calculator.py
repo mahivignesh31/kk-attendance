@@ -268,9 +268,9 @@ def calculate_hours(
     16–60 min → full day + 1 grace
     61–240 min → half day
     > 4 hours → absent
-    One punch / out 00:00:00 still uses late/early vs the timetable
-    (a 17:42-only punch is Absent, not an automatic Present).
-    No punch on a working day → absent (handled by callers)
+    A check-in without a check-out, or a check-out without a check-in, is absent.
+    Out time 00:00:00 is a missing check-out, so that day is absent too.
+    No punch on a class day → absent (handled by callers)
     """
     del lunch_start, lunch_end, full_day_hours, half_day_hours, clip_start, clip_end
     invalid = False
@@ -315,20 +315,8 @@ def calculate_hours(
     if not intervals and not points:
         if not lone_in and not lone_out and not missing:
             return HourResult(None, 0, None, "incomplete", invalid, False, False)
-        if schedule_start is None or schedule_end is None:
-            return HourResult(None, 0, None, "full_day", invalid, True, False)
-        late = 0
-        early = 0
-        if lone_in:
-            first_in = datetime.combine(day, min(lone_in))
-            late = max(0, int((first_in - datetime.combine(day, schedule_start)).total_seconds()) // 60)
-        if lone_out:
-            last_out = datetime.combine(day, max(lone_out))
-            early = max(0, int((datetime.combine(day, schedule_end) - last_out).total_seconds()) // 60)
-        # In-only with no out: do not invent an early leave; late alone decides.
-        # Out-only with no in: early alone decides.
-        status, grace = sop_status(late, early, shift_minutes)
-        return HourResult(None, 0, None, status, invalid, True, grace)
+        # SOP: both punches are required. A lone check-in or check-out is absent.
+        return HourResult(None, 0, None, "absent", invalid, True, False)
 
     merged = merge_intervals(intervals)
     elapsed_seconds = sum(int((end - start).total_seconds()) for start, end in merged)
@@ -545,10 +533,11 @@ def summarize_candidate(
 ) -> AttendanceTotals:
     """One attendance percentage for every screen.
 
-    Attendance % = ((full days + half days × 0.5) / total working days) × 100.
-    Sundays, configured holidays, and future dates are excluded. A day before
-    enrollment is absent. A completed working day with no mark is absent.
-    Today is left out until that day's attendance is finalized.
+    Attendance % = ((full days + half days × 0.5) / days class was held) × 100.
+    The caller passes only days the batch actually held class. Sundays,
+    holidays, and future dates are excluded. A day before enrollment is absent.
+    A class day with no mark is absent. Today is left out until that day's
+    attendance is finalized.
     """
     del rules
     totals = AttendanceTotals()
@@ -635,7 +624,7 @@ def _finalized(record: Optional[dict]) -> bool:
 
 
 def _unearned_full_day(record: dict) -> bool:
-    """A single punch is a full day under the SOP, so it is not removed here."""
+    """A lone punch is already absent, so nothing further is removed here."""
     del record
     return False
 

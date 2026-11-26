@@ -64,7 +64,7 @@ export default function Dashboard() {
         <Card label="Half day" value={synced ? cards.half_day : null} hint={dayHint(synced, summary, "half_day", data.selected_date)} />
         <Card label="Absent" value={synced ? cards.absent : null} hint={dayHint(synced, summary, "absent", data.selected_date)} />
         <Card label="Classroom attendance" value={percent(cards.average_verified_percent)} hint="Classroom only. RF and OJT are not included." />
-        <Card label="Total days" value={cards.verified_training_days} hint="Batch start through today, Sundays left out" />
+        <Card label="Total days" value={cards.verified_training_days} hint="Days class was held, Sundays left out" />
         <Card label="Last successful sync" value={cards.last_sync ? stamp(cards.last_sync.finished_at) : "Never"} hint={cards.last_sync?.message || "Portal not read yet"} />
         <Card label="Not yet verified" value={synced ? cards.not_verified : null} hint={synced ? "Eligible candidates without a reconciled row" : "Waiting for candidate-level sync"} />
       </section>

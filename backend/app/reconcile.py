@@ -307,12 +307,12 @@ def _build_record(
             schedule_start=clocks["training_start"],
             schedule_end=clocks["training_end"],
         )
-        if result.missing_checkout and result.calculated_status == "full_day":
+        if result.missing_checkout and result.calculated_status == "absent" and result.qualifying_minutes is None:
             issues.append(
                 Issue(
                     "single_punch",
                     "info",
-                    f"{candidate.get('name')} on {day.isoformat()} has one biometric or app punch. Counted as a full day and the sync continued.",
+                    f"{candidate.get('name')} on {day.isoformat()} has a check-in without a check-out. Counted as absent.",
                     int(candidate["id"]),
                     ",".join(categories),
                     "full_day",

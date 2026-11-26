@@ -185,10 +185,11 @@ def filter_dates(
 
     from .calculator import parse_date, today_ist
 
-    # Never sync today — attendance for the current IST day is incomplete.
-    yesterday = (today_ist() - timedelta(days=1)).isoformat()
+    # Sync through today (IST). Later the same day, incremental sync refreshes
+    # today because punches can still arrive. Future dates are left out.
+    today = today_ist().isoformat()
 
-    selected = sorted(day for day in dates if day <= yesterday)
+    selected = sorted(day for day in dates if day <= today)
     if mode == "range":
         # Cross-check one date or a range: include every calendar day in the
         # window, even when nobody punched (those days save as all-absent).
@@ -198,11 +199,11 @@ def filter_dates(
             if date_from:
                 selected = [day for day in selected if day >= date_from]
             if date_to:
-                selected = [day for day in selected if day <= min(date_to, yesterday)]
-            return [day for day in selected if day <= yesterday]
+                selected = [day for day in selected if day <= min(date_to, today)]
+            return [day for day in selected if day <= today]
         if end < start:
             start, end = end, start
-        last = parse_date(yesterday)
+        last = parse_date(today)
         if last is not None and end > last:
             end = last
         if last is not None and start > last:
@@ -215,5 +216,9 @@ def filter_dates(
         return days
     if mode == "full":
         return selected
-    # incremental: new dates, or dates not yet detail-synced
-    return [day for day in selected if not (existing.get(day) or {}).get("detail_synced")]
+    # incremental: new dates, dates not yet detail-synced, and today
+    return [
+        day
+        for day in selected
+        if day == today or not (existing.get(day) or {}).get("detail_synced")
+    ]

@@ -155,17 +155,17 @@ def test_sop_status_every_band_boundary(late, early, status, grace):
         ("14:00", "18:00", "absent", False),
         ("09:00", "13:59", "absent", False),
         ("09:00", "12:00", "absent", False),
-        # One punch — late/early still applies
-        ("09:00", None, "full_day", False),
-        ("09:15", None, "full_day", False),
-        ("09:16", None, "full_day", True),
-        ("10:00", None, "full_day", True),
-        ("10:01", None, "half_day", False),
-        ("13:00", None, "half_day", False),
+        # One punch, or out 00:00:00, is a missing check-out → absent
+        ("09:00", None, "absent", False),
+        ("09:15", None, "absent", False),
+        ("09:16", None, "absent", False),
+        ("10:00", None, "absent", False),
+        ("10:01", None, "absent", False),
+        ("13:00", None, "absent", False),
         ("13:01", None, "absent", False),
         ("17:42:23", None, "absent", False),
-        ("08:37:13", "00:00:00", "full_day", False),
-        ("10:30", "00:00:00", "half_day", False),
+        ("08:37:13", "00:00:00", "absent", False),
+        ("10:30", "00:00:00", "absent", False),
         ("14:00", "00:00:00", "absent", False),
     ],
 )
@@ -195,24 +195,21 @@ def test_the_third_grace_day_in_fifteen_days_becomes_a_half_day():
     assert grace_days_to_demote(flagged[:2]) == set()
 
 
-def test_one_punch_still_uses_late_early_sop():
-    # On-time single punch → Full day
+def test_one_punch_without_checkout_is_absent():
     missing = hours("09:00", None)
-    assert missing.calculated_status == "full_day"
+    assert missing.calculated_status == "absent"
     assert missing.missing_checkout is True
     assert missing.qualifying_minutes is None
     assert missing.grace_band is False
-    assert hours("09:05", None).calculated_status == "full_day"
+    assert hours("09:05", None).calculated_status == "absent"
     assert hours("09:05", None).grace_band is False
-    # 20 min late, one punch → Full day + grace
-    assert hours("09:20", None).calculated_status == "full_day"
-    assert hours("09:20", None).grace_band is True
-    # 17:42 only (Battula-style) → > 4 hrs late → Absent
+    assert hours("09:20", None).calculated_status == "absent"
+    assert hours("09:20", None).grace_band is False
     late_only = hours("17:42:23", None)
     assert late_only.calculated_status == "absent"
     assert late_only.missing_checkout is True
     midnight_out = hours("08:37:13", "00:00:00")
-    assert midnight_out.calculated_status == "full_day"
+    assert midnight_out.calculated_status == "absent"
     assert midnight_out.missing_checkout is True
     backwards = hours("18:00", "09:00")
     assert backwards.calculated_status == "incomplete"
@@ -227,6 +224,22 @@ def _friday() -> date:
     while cursor.weekday() != 4:
         cursor += timedelta(days=1)
     return cursor
+
+
+def test_class_days_ignore_weekdays_when_class_was_not_held():
+    from app.reporting import _total_days
+
+    context = {
+        "batch_start": date(2025, 12, 31),
+        "today": date(2026, 4, 9),
+        "batch": {"expected_end_date": "2026-04-09"},
+        "dates": [
+            {"attendance_date": "2026-01-08"},
+            {"attendance_date": "2026-01-11"},
+        ],
+        "records": [{"attendance_date": "2026-01-09", "candidate_pk": 1}],
+    }
+    assert _total_days(context) == [date(2026, 1, 8), date(2026, 1, 9)]
 
 
 def test_percentage_uses_every_day_through_today():
@@ -760,6 +773,30 @@ def test_candidate_id_punch_table_builds_present_and_absent():
         date_to="2026-11-01",
         existing={},
     ) == ["2026-11-01"]
+
+
+def test_sync_includes_today_and_skips_tomorrow(monkeypatch):
+    from datetime import date as date_cls
+
+    from app import calculator
+
+    today = date_cls(2026, 11, 25)
+    tomorrow = date_cls(2026, 11, 26)
+    monkeypatch.setattr(calculator, "today_ist", lambda: today)
+    assert filter_dates(
+        [today.isoformat(), tomorrow.isoformat(), "2026-11-24"],
+        mode="incremental",
+        date_from=None,
+        date_to=None,
+        existing={today.isoformat(): {"detail_synced": 1}, "2026-11-24": {"detail_synced": 1}},
+    ) == [today.isoformat()]
+    assert filter_dates(
+        [],
+        mode="range",
+        date_from=today.isoformat(),
+        date_to=tomorrow.isoformat(),
+        existing={},
+    ) == [today.isoformat()]
 
 
 def test_api_serves_candidates_exports_and_does_not_seed_attendance(tmp_path, monkeypatch):
